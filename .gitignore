@@ -8,6 +8,5 @@ dist/
 docs/
 graphify-out/
 node_modules/
-openspec/changes/*/.tmp/
-opensepc/
+openspec/
 web/dist/
