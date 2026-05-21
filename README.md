@@ -254,14 +254,6 @@ go test ./...
 COUSWEE_STATIC_DIR=web/dist go run ./cmd/couswee
 ```
 
-生成 graphify 结构图：
-
-```bash
-graphify update . --force
-```
-
-当前 graphify 输出在 `graphify-out/`，包含 `GRAPH_REPORT.md`、`graph.json` 和 `graph.html`。本 README 的功能梳理基于该结构图和源码核对。
-
 ## 验证
 
 如需验证发布包：
