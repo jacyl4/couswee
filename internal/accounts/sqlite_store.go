@@ -43,7 +43,7 @@ func (s *SQLiteStore) initSchema() error {
 		`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS accounts (
 			id TEXT PRIMARY KEY,
-			nickname TEXT NOT NULL UNIQUE,
+			nickname TEXT NOT NULL,
 			profile_name TEXT NOT NULL UNIQUE,
 			auth_path TEXT NOT NULL,
 			login_method TEXT NOT NULL,
@@ -101,7 +101,7 @@ func (s *SQLiteStore) initSchema() error {
 	if err := s.ensureColumn("accounts", "usage_error", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := s.dropAccountDisplayNameColumn(); err != nil {
+	if err := s.rebuildAccountTableIfNeeded(); err != nil {
 		return err
 	}
 	return nil
@@ -135,8 +135,8 @@ func (s *SQLiteStore) ensureColumn(table, column, definition string) error {
 	return nil
 }
 
-func (s *SQLiteStore) dropAccountDisplayNameColumn() error {
-	if !s.columnExists("accounts", "display_name") {
+func (s *SQLiteStore) rebuildAccountTableIfNeeded() error {
+	if !s.columnExists("accounts", "display_name") && !s.nicknameHasUniqueIndex() {
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -147,7 +147,7 @@ func (s *SQLiteStore) dropAccountDisplayNameColumn() error {
 	stmts := []string{
 		`CREATE TABLE accounts_new (
 			id TEXT PRIMARY KEY,
-			nickname TEXT NOT NULL UNIQUE,
+			nickname TEXT NOT NULL,
 			profile_name TEXT NOT NULL UNIQUE,
 			auth_path TEXT NOT NULL,
 			login_method TEXT NOT NULL,
@@ -173,10 +173,65 @@ func (s *SQLiteStore) dropAccountDisplayNameColumn() error {
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("drop sqlite column accounts.display_name: %w", err)
+			return fmt.Errorf("rebuild sqlite accounts table: %w", err)
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *SQLiteStore) nicknameHasUniqueIndex() bool {
+	rows, err := s.db.Query(`PRAGMA index_list(accounts)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int
+		var name, origin, partial string
+		var unique int
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			return false
+		}
+		if unique == 0 {
+			continue
+		}
+		if s.indexColumns(name).equals([]string{"nickname"}) {
+			return true
+		}
+	}
+	return false
+}
+
+type indexColumns []string
+
+func (s *SQLiteStore) indexColumns(indexName string) indexColumns {
+	rows, err := s.db.Query(`PRAGMA index_info(` + indexName + `)`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var seqno, cid int
+		var name string
+		if err := rows.Scan(&seqno, &cid, &name); err != nil {
+			return nil
+		}
+		columns = append(columns, name)
+	}
+	return columns
+}
+
+func (columns indexColumns) equals(want []string) bool {
+	if len(columns) != len(want) {
+		return false
+	}
+	for i := range columns {
+		if columns[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *SQLiteStore) columnExists(table, column string) bool {
@@ -268,7 +323,7 @@ func (s *SQLiteStore) UpdateAccount(selector string, patch Account) (Account, er
 	err := s.Mutate(func(current []Account) ([]Account, error) {
 		found := false
 		for i := range current {
-			if current[i].ID == selector || current[i].Nickname == selector {
+			if current[i].ID == selector || current[i].ProfileName == selector {
 				found = true
 				if patch.Nickname != "" {
 					current[i].Nickname = patch.Nickname

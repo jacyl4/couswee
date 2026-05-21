@@ -99,7 +99,7 @@ func (s *Service) RefreshAccountWithReason(ctx context.Context, selector string,
 
 	accountsList := s.accounts()
 	for _, account := range accountsList {
-		if account.ID != selector && account.Nickname != selector && account.ProfileName != selector {
+		if account.ID != selector && accountIdentity(account) != selector {
 			continue
 		}
 		record := s.collectAccount(ctx, account)
@@ -118,7 +118,7 @@ func (s *Service) collectAccount(ctx context.Context, account accounts.Account) 
 	}
 	record, err := s.collector.Collect(ctx, account)
 	if err != nil {
-		if cached, ok := s.cache.Get(account.Nickname); ok {
+		if cached, ok := s.cache.Get(accountIdentity(account)); ok {
 			cached.Stale = true
 			cached.Error = err.Error()
 			cached.LastRefresh = s.now()
@@ -179,7 +179,7 @@ func (s *Service) persistUsage(accountsList []accounts.Account, records []UsageR
 	changed := false
 	next := append([]accounts.Account(nil), accountsList...)
 	for i := range next {
-		record, ok := byAccount[next[i].Nickname]
+		record, ok := byAccount[accountIdentity(next[i])]
 		if !ok {
 			continue
 		}

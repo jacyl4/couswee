@@ -137,21 +137,33 @@ func TestServiceDoesNotPersistAccountFallbackToAccountSink(t *testing.T) {
 func TestServiceRefreshAccountOnlyCollectsMatchingAccount(t *testing.T) {
 	var collected []string
 	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
-		collected = append(collected, account.Nickname)
-		return UsageRecord{Account: account.Nickname, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
+		collected = append(collected, account.ProfileName)
+		return UsageRecord{Account: account.ProfileName, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
 	}), func() []accounts.Account {
-		return []accounts.Account{{ID: "1", Nickname: "Dev1"}, {ID: "2", Nickname: "Dev2"}}
+		return []accounts.Account{{ID: "1", Nickname: "Dev", ProfileName: "dev-main"}, {ID: "2", Nickname: "Dev", ProfileName: "dev-backup"}}
 	})
 
-	if !svc.RefreshAccount(context.Background(), "2") {
+	if !svc.RefreshAccount(context.Background(), "dev-backup") {
 		t.Fatal("RefreshAccount returned false")
 	}
-	if len(collected) != 1 || collected[0] != "Dev2" {
+	if len(collected) != 1 || collected[0] != "dev-backup" {
 		t.Fatalf("collected = %#v", collected)
 	}
 	records := svc.Records()
-	if len(records) != 1 || records[0].Account != "Dev2" {
+	if len(records) != 1 || records[0].Account != "dev-backup" {
 		t.Fatalf("records = %#v", records)
+	}
+}
+
+func TestServiceRefreshAccountDoesNotMatchNickname(t *testing.T) {
+	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
+		return UsageRecord{Account: account.ProfileName, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
+	}), func() []accounts.Account {
+		return []accounts.Account{{ID: "1", Nickname: "Dev", ProfileName: "dev-main"}}
+	})
+
+	if svc.RefreshAccount(context.Background(), "Dev") {
+		t.Fatal("RefreshAccount matched display nickname")
 	}
 }
 

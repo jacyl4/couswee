@@ -40,7 +40,7 @@ func (c AccountCollector) Collect(_ context.Context, account accounts.Account) (
 		unit = UnitPercent
 	}
 	return UsageRecord{
-		Account:         account.Nickname,
+		Account:         accountIdentity(account),
 		Usage5h:         float64(account.Usage5h),
 		UsageWeekly:     float64(account.UsageWeekly),
 		Remaining5h:     float64(account.Usage5h),
@@ -79,7 +79,7 @@ func (c APICollector) Collect(ctx context.Context, account accounts.Account) (Us
 		return UsageRecord{}, fmt.Errorf("parse usage api url: %w", err)
 	}
 	q := endpoint.Query()
-	q.Set("account", account.Nickname)
+	q.Set("account", accountIdentity(account))
 	q.Set("auth_path", authPath)
 	if auth.AccountID != "" {
 		q.Set("account_id", auth.AccountID)
@@ -173,7 +173,7 @@ func (c CommandCollector) Collect(ctx context.Context, account accounts.Account)
 	if len(parts) == 0 {
 		return UsageRecord{}, ErrNoCollector
 	}
-	args := append(parts[1:], account.Nickname, collectorAuthPath(account, c.ActiveAuthPath))
+	args := append(parts[1:], accountIdentity(account), collectorAuthPath(account, c.ActiveAuthPath))
 	cmd := exec.CommandContext(ctx, parts[0], args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -603,9 +603,7 @@ func unixTime(value int64) time.Time {
 }
 
 func normalizeRecord(record UsageRecord, account accounts.Account, source, unit string, nowFunc func() time.Time) UsageRecord {
-	if record.Account == "" {
-		record.Account = account.Nickname
-	}
+	record.Account = accountIdentity(account)
 	if record.Unit == "" {
 		record.Unit = unit
 	}
@@ -650,6 +648,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func accountIdentity(account accounts.Account) string {
+	if strings.TrimSpace(account.ProfileName) != "" {
+		return account.ProfileName
+	}
+	return account.Nickname
 }
 
 func collectorAuthPath(account accounts.Account, activeAuthPath string) string {

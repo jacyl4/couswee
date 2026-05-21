@@ -142,9 +142,20 @@ func TestAddDuplicateRejected(t *testing.T) {
 	}
 }
 
+func TestAddDuplicateNicknameWithDistinctProfileAllowed(t *testing.T) {
+	service, store, _ := newTestService(t, []Account{{Nickname: "Dev", ProfileName: "dev-main", AuthPath: "~/one.json"}})
+	_, err := service.Add(Account{Nickname: "Dev", ProfileName: "dev-backup", AuthPath: "~/other.json"})
+	if err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if got := store.Accounts(); len(got) != 2 {
+		t.Fatalf("accounts = %#v", got)
+	}
+}
+
 func TestDeleteAccountsPersists(t *testing.T) {
-	service, store, _ := newTestService(t, []Account{{Nickname: "Dev1"}, {Nickname: "Dev2"}, {Nickname: "Dev3"}})
-	deleted, err := service.Delete([]string{"Dev1", "Dev3"})
+	service, store, _ := newTestService(t, []Account{{Nickname: "Dev1", ProfileName: "dev-1"}, {Nickname: "Dev2", ProfileName: "dev-2"}, {Nickname: "Dev3", ProfileName: "dev-3"}})
+	deleted, err := service.Delete([]string{"dev-1", "dev-3"})
 	if err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
@@ -213,7 +224,7 @@ func TestReplaceUsagePersistsChangedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewService(store, home, NoopUsageRefresher{})
-	if err := service.ReplaceUsage([]Account{{Nickname: "Dev1", Usage5h: 55, UsageWeekly: 66, ResetTime5h: "2026-05-20T23:00:00+08:00", ResetTimeWeekly: "2026-05-24T23:00:00+08:00", UsageSource: "api", UsageLastRefresh: "2026-05-21T00:00:00Z", UsageStale: true, UsageError: "temporary failure"}}); err != nil {
+	if err := service.ReplaceUsage([]Account{{ProfileName: "Dev1", Usage5h: 55, UsageWeekly: 66, ResetTime5h: "2026-05-20T23:00:00+08:00", ResetTimeWeekly: "2026-05-24T23:00:00+08:00", UsageSource: "api", UsageLastRefresh: "2026-05-21T00:00:00Z", UsageStale: true, UsageError: "temporary failure"}}); err != nil {
 		t.Fatalf("ReplaceUsage() error = %v", err)
 	}
 	accounts := store.Accounts()

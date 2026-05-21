@@ -25,10 +25,10 @@ The system SHALL provide `GET /api/current` returning the active account as JSON
 - **THEN** the system SHALL return the active account as JSON
 
 ### Requirement: Switch account endpoint
-The system SHALL provide `POST /api/switch` accepting a JSON body with `nickname` and performing an account switch, then prioritizing usage refresh for the newly active account.
+The system SHALL provide `POST /api/switch` accepting a JSON body with `profile_name` or account id and performing an account switch, then prioritizing usage refresh for the newly active account. `nickname` SHALL remain display-only metadata and SHALL NOT be used to identify the target account.
 
 #### Scenario: Switch request submitted
-- **WHEN** a client sends `POST /api/switch` with a valid `nickname`
+- **WHEN** a client sends `POST /api/switch` with a valid `profile_name`
 - **THEN** the system SHALL switch to the requested account and return the selected account as JSON
 
 #### Scenario: Switch refreshes usage
@@ -81,9 +81,9 @@ The system SHALL provide APIs for creating, editing, deleting, listing, and swit
 - **THEN** the system SHALL update SQLite metadata and return the updated account
 
 #### Scenario: Accounts are deleted
-- **WHEN** a client sends `DELETE /api/accounts` with account ids or nicknames
+- **WHEN** a client sends `DELETE /api/accounts` with account ids or `profile_name` values
 - **THEN** the system SHALL delete matching SQLite account records and apply safe auth/profile cleanup rules
 
-#### Scenario: Account switch remains compatible
-- **WHEN** a client sends existing `POST /api/switch` with a nickname
-- **THEN** the system SHALL continue to support the compatibility switch path using the SQLite account store
+#### Scenario: Nickname is display-only
+- **WHEN** a client sends `POST /api/switch` with only a `nickname`
+- **THEN** the system SHALL reject the request without modifying active account state

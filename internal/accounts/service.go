@@ -220,7 +220,7 @@ func (s *Service) Add(account Account) (Account, error) {
 	account = normalizeAccount(account)
 	err := s.store.Mutate(func(current []Account) ([]Account, error) {
 		for _, existing := range current {
-			if existing.Nickname == account.Nickname {
+			if existing.ProfileName == account.ProfileName {
 				return current, ErrDuplicateAccount
 			}
 		}
@@ -259,12 +259,12 @@ func (s *Service) DeleteSelectors(selectors []string) (int, error) {
 	err := s.store.Mutate(func(current []Account) ([]Account, error) {
 		next := current[:0]
 		for _, account := range current {
-			if _, ok := targets[account.Nickname]; ok {
+			if _, ok := targets[account.ID]; ok {
 				deleted++
 				removed = append(removed, account)
 				continue
 			}
-			if _, ok := targets[account.ID]; ok {
+			if _, ok := targets[account.ProfileName]; ok {
 				deleted++
 				removed = append(removed, account)
 				continue
@@ -300,7 +300,7 @@ func (s *Service) SwitchSelector(selector string) (Account, error) {
 	accounts := s.store.Accounts()
 	targetIndex := -1
 	for i, account := range accounts {
-		if account.Nickname == selector || account.ID == selector || account.ProfileName == selector {
+		if account.ProfileName == selector || account.ID == selector {
 			targetIndex = i
 			break
 		}
@@ -402,14 +402,14 @@ func (s *Service) RefreshUsage() error {
 }
 
 func (s *Service) ReplaceUsage(accounts []Account) error {
-	usageByNickname := make(map[string]Account, len(accounts))
+	usageByProfile := make(map[string]Account, len(accounts))
 	for _, account := range accounts {
-		usageByNickname[account.Nickname] = account
+		usageByProfile[account.ProfileName] = account
 	}
 	return s.store.Mutate(func(current []Account) ([]Account, error) {
 		changed := false
 		for i := range current {
-			next, ok := usageByNickname[current[i].Nickname]
+			next, ok := usageByProfile[current[i].ProfileName]
 			if !ok {
 				continue
 			}
@@ -500,7 +500,7 @@ func (s *Service) UpdateAccount(selector string, patch Account) (Account, error)
 	var updated Account
 	err := s.store.Mutate(func(current []Account) ([]Account, error) {
 		for i := range current {
-			if current[i].ID == selector || current[i].Nickname == selector {
+			if current[i].ID == selector || current[i].ProfileName == selector {
 				if patch.Nickname != "" {
 					current[i].Nickname = patch.Nickname
 				}

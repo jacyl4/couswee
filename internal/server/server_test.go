@@ -87,9 +87,9 @@ func TestPostAccountRefreshesUsage(t *testing.T) {
 	accountService := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
 	var collected []string
 	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
-		collected = append(collected, account.Nickname)
+		collected = append(collected, account.ProfileName)
 		return usage.UsageRecord{
-			Account:         account.Nickname,
+			Account:         account.ProfileName,
 			Remaining5h:     63,
 			RemainingWeekly: 77,
 			Unit:            usage.UnitPercent,
@@ -129,8 +129,8 @@ func TestPostAccountDuplicate(t *testing.T) {
 }
 
 func TestDeleteAccounts(t *testing.T) {
-	srv := testApp(t, []accounts.Account{{Nickname: "Dev1"}, {Nickname: "Dev2"}})
-	resp := doReq(t, srv, http.MethodDelete, "/api/accounts", bytes.NewBufferString(`{"nicknames":["Dev1"]}`))
+	srv := testApp(t, []accounts.Account{{Nickname: "Dev1", ProfileName: "dev-1"}, {Nickname: "Dev2", ProfileName: "dev-2"}})
+	resp := doReq(t, srv, http.MethodDelete, "/api/accounts", bytes.NewBufferString(`{"profile_names":["dev-1"]}`))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -152,7 +152,7 @@ func TestGetCurrentNotFound(t *testing.T) {
 	}
 }
 
-func TestPostSwitchRequiresNickname(t *testing.T) {
+func TestPostSwitchRequiresProfileOrID(t *testing.T) {
 	srv := testApp(t, []accounts.Account{{Nickname: "Dev1"}})
 	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{}`))
 	if resp.StatusCode != http.StatusBadRequest {
@@ -162,8 +162,16 @@ func TestPostSwitchRequiresNickname(t *testing.T) {
 
 func TestPostSwitchUnknown(t *testing.T) {
 	srv := testApp(t, []accounts.Account{{Nickname: "Dev1"}})
-	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{"nickname":"missing"}`))
+	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{"profile_name":"missing"}`))
 	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestPostSwitchRejectsNicknameOnly(t *testing.T) {
+	srv := testApp(t, []accounts.Account{{Nickname: "Dev1", ProfileName: "dev-1"}})
+	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{"nickname":"Dev1"}`))
+	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }
@@ -191,7 +199,7 @@ func TestPostSwitchRefreshesUsage(t *testing.T) {
 	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
 		collects++
 		return usage.UsageRecord{
-			Account:         account.Nickname,
+			Account:         account.ProfileName,
 			Remaining5h:     71,
 			RemainingWeekly: 82,
 			Unit:            usage.UnitPercent,
@@ -200,7 +208,7 @@ func TestPostSwitchRefreshesUsage(t *testing.T) {
 	}), accountService.Accounts)
 	srv := New(accountService, Config{StaticDir: t.TempDir(), Usage: usageService})
 
-	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{"nickname":"Dev2"}`))
+	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{"profile_name":"Dev2"}`))
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
@@ -234,14 +242,14 @@ func TestPostSwitchRefreshesActiveWithoutBlockingOnOtherAccounts(t *testing.T) {
 	}
 	accountService := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
 	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
-		if account.Nickname != "Dev2" {
-			t.Fatalf("unexpected collection for %s", account.Nickname)
+		if account.ProfileName != "Dev2" {
+			t.Fatalf("unexpected collection for %s", account.ProfileName)
 		}
-		return usage.UsageRecord{Account: account.Nickname, Remaining5h: 91, RemainingWeekly: 92, Source: usage.SourceAPI}, nil
+		return usage.UsageRecord{Account: account.ProfileName, Remaining5h: 91, RemainingWeekly: 92, Source: usage.SourceAPI}, nil
 	}), accountService.Accounts)
 	srv := New(accountService, Config{StaticDir: t.TempDir(), Usage: usageService})
 
-	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{"nickname":"Dev2"}`))
+	resp := doReq(t, srv, http.MethodPost, "/api/switch", bytes.NewBufferString(`{"profile_name":"Dev2"}`))
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
@@ -511,7 +519,7 @@ func TestLoginStatusRefreshesUsageForSucceededAccount(t *testing.T) {
 	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
 		collected = append(collected, account.ID)
 		return usage.UsageRecord{
-			Account:         account.Nickname,
+			Account:         account.ProfileName,
 			Remaining5h:     41,
 			RemainingWeekly: 82,
 			Unit:            usage.UnitPercent,

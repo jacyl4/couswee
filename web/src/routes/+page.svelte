@@ -93,7 +93,7 @@
   let refreshingUsageKeys = new Set<string>();
   let addingAccount = false;
   let manualImportOpen = false;
-  let addForm = { nickname: '', auth_path: '', subscription: '' };
+  let addForm = { nickname: '', profile_name: '', auth_path: '', subscription: '' };
   let activeLogin: LoginSession | null = null;
   let loginBusy = false;
   let selectedKeys = new Set<string>();
@@ -162,7 +162,7 @@
   }
 
   async function switchAccount(account: Account) {
-    const selector = account.id || account.nickname;
+    const selector = accountKey(account);
     if (!selector || switchingSelector) return;
     switchingSelector = selector;
     markUsageRefreshing(selector, true);
@@ -172,7 +172,7 @@
       const response = await fetch(API.switch, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(account.id ? { id: account.id } : { nickname: account.nickname })
+        body: JSON.stringify(account.profile_name ? { profile_name: account.profile_name } : { id: account.id })
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -200,7 +200,7 @@
     selectedSet: Set<string>,
     refreshingSet: Set<string>
   ): DashboardAccount {
-    const usage = usageMap.get(account.nickname);
+    const usage = usageMap.get(accountKey(account));
     const remaining5h = remaining(account, usage, '5h_remaining');
     const remainingWeekly = remaining(account, usage, 'weekly_remaining');
     const tone = toneFor(remaining5h, remainingWeekly);
@@ -265,7 +265,7 @@
   }
 
   function accountKey(account: Account) {
-    return account.id || account.nickname;
+    return account.profile_name || account.id || account.nickname;
   }
 
   function toggleSelected(account: Account) {
@@ -351,6 +351,7 @@
 
   async function submitAddAccount() {
     const nickname = addForm.nickname.trim();
+    const profileName = addForm.profile_name.trim();
     const authPath = addForm.auth_path.trim();
     if (!nickname || !authPath) {
       noticeMessage = '请填写账号昵称和 auth 文件路径。';
@@ -364,6 +365,7 @@
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
           nickname,
+          profile_name: profileName,
           auth_path: authPath,
           login_method: 'imported',
           status: 'ready',
@@ -374,7 +376,7 @@
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error || `新增账号失败：HTTP ${response.status}`);
       }
-      addForm = { nickname: '', auth_path: '', subscription: '' };
+      addForm = { nickname: '', profile_name: '', auth_path: '', subscription: '' };
       manualImportOpen = false;
       addingAccount = false;
       await refreshDashboard();
@@ -426,7 +428,7 @@
       const response = await fetch(API.accounts, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ ids, nicknames: ids })
+        body: JSON.stringify({ profile_names: ids, ids })
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -584,6 +586,7 @@
       {#if manualImportOpen}
         <form class="add-account-form" aria-label="手动导入账号" on:submit|preventDefault={submitAddAccount}>
           <input bind:value={addForm.nickname} type="text" placeholder="账号昵称" autocomplete="off" />
+          <input bind:value={addForm.profile_name} type="text" placeholder="profile_name（留空则按昵称生成）" autocomplete="off" />
           <input bind:value={addForm.auth_path} type="text" placeholder="auth 文件路径，例如 ~/.codex-auth/main.json" autocomplete="off" />
           <input bind:value={addForm.subscription} type="text" placeholder="订阅/备注（可选）" autocomplete="off" />
           <button type="submit">保存账号</button>

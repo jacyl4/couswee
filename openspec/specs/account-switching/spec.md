@@ -14,11 +14,11 @@ The system SHALL expose the currently active Codex account based on the SQLite a
 - **WHEN** no configured account is marked active
 - **THEN** the system SHALL return a not-found response for the current-account API
 
-### Requirement: Switch active account by nickname
-The system SHALL switch the active Codex account when given a valid configured nickname or account id by activating that account's managed profile/auth file.
+### Requirement: Switch active account by profile
+The system SHALL switch the active Codex account when given a valid configured `profile_name` or account id by activating that account's managed profile/auth file. `nickname` SHALL NOT be used as an account identity selector.
 
 #### Scenario: Successful switch
-- **WHEN** a client submits a switch request for an existing account whose managed auth file is readable
+- **WHEN** a client submits a switch request for an existing `profile_name` whose managed auth file is readable
 - **THEN** the system SHALL activate that account's auth/profile for Codex CLI use, mark only that account active in SQLite, and return the selected account
 
 #### Scenario: Auth source cannot be read
@@ -31,4 +31,3 @@ The system SHALL maintain at most one active account after every successful swit
 #### Scenario: Account is switched
 - **WHEN** a switch request succeeds
 - **THEN** the selected account SHALL be active and every other configured account SHALL be inactive in SQLite
-

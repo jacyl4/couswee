@@ -179,7 +179,7 @@ func (s *Server) postAccount(c *fiber.Ctx) error {
 
 func (s *Server) findAccount(selector string, fallback accounts.Account) accounts.Account {
 	for _, account := range s.service.Accounts() {
-		if account.ID == selector || account.Nickname == selector || account.ProfileName == selector {
+		if account.ID == selector || account.ProfileName == selector {
 			return account
 		}
 	}
@@ -188,13 +188,13 @@ func (s *Server) findAccount(selector string, fallback accounts.Account) account
 
 func (s *Server) deleteAccounts(c *fiber.Ctx) error {
 	var req struct {
-		Nicknames []string `json:"nicknames"`
-		IDs       []string `json:"ids"`
+		ProfileNames []string `json:"profile_names"`
+		IDs          []string `json:"ids"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
-	selectors := append([]string{}, req.Nicknames...)
+	selectors := append([]string{}, req.ProfileNames...)
 	selectors = append(selectors, req.IDs...)
 	deleted, err := s.service.DeleteSelectors(selectors)
 	if err != nil {
@@ -219,22 +219,18 @@ func (s *Server) getCurrent(c *fiber.Ctx) error {
 
 func (s *Server) postSwitch(c *fiber.Ctx) error {
 	var req struct {
-		Nickname string `json:"nickname"`
-		ID       string `json:"id"`
-		Profile  string `json:"profile_name"`
+		ID      string `json:"id"`
+		Profile string `json:"profile_name"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
-	selector := req.Nickname
+	selector := req.Profile
 	if selector == "" {
 		selector = req.ID
 	}
 	if selector == "" {
-		selector = req.Profile
-	}
-	if selector == "" {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "nickname or id is required"})
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "profile_name or id is required"})
 	}
 	account, err := s.service.SwitchSelector(selector)
 	if err != nil {
