@@ -1,0 +1,24 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+context: |
+  本项目的 OpenSpec 文档默认使用中文编写。
+  需求、设计、任务和 spec 描述应优先使用中文；只有代码标识、API 路径、字段名、命令、界面效果图中明确要求保留的英文文案除外。
+  面向用户的项目名使用 couswee / couswee 时，应以当前具体 UI 要求为准；本次账号监测页标题使用“couswee 账号切换监测”。
+  Codex 用量展示使用“剩余流量 / left”语义，不要把已消耗用量标成剩余。
+
+# Per-artifact rules (optional)
+rules:
+  proposal:
+    - 默认使用中文编写。
+    - 保留必要的英文代码标识、API 名称和字段名。
+  design:
+    - 默认使用中文编写。
+    - 明确写出关键设计决策、备选方案和拒绝原因。
+  specs:
+    - 默认使用中文编写。
+    - Requirement 和 Scenario 标题可以使用中文，但 MUST/SHALL 等规范关键词可以保留英文以符合 OpenSpec 习惯。
+  tasks:
+    - 默认使用中文编写。
+    - 每个任务必须保持 `- [ ]` 复选框格式。

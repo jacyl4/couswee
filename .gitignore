@@ -1,0 +1,11 @@
+.cache/
+.codex/
+.omx/
+.svelte-kit/
+.DS_Store
+docs/
+node_modules/
+opensepc/
+web/dist/
+
+
