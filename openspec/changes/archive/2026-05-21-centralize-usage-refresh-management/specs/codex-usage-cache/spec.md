@@ -1,8 +1,5 @@
-# codex-usage-cache Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change improve-codex-usage-monitor. Update Purpose after archive.
-## Requirements
 ### Requirement: Cache usage records in memory
 The system SHALL maintain a thread-safe in-memory cache of the latest usage record for each configured account, while treating SQLite as the only durable usage cache. Cache mutation SHALL happen through the unified usage refresh management path.
 
@@ -33,13 +30,6 @@ The system SHALL refresh usage data automatically through the unified usage refr
 - **WHEN** configuration requests a refresh interval above 5 minutes
 - **THEN** the system SHALL clamp the effective interval to 5 minutes
 
-### Requirement: Preserve stale data on refresh failure
-The system SHALL preserve the last successful usage data when a refresh cycle fails and SHALL expose stale/error metadata to clients.
-
-#### Scenario: Refresh fails after prior success
-- **WHEN** a refresh cycle fails for an account that has cached usage
-- **THEN** the system SHALL keep the prior usage values and mark the record as stale with the latest error message
-
 ### Requirement: Persist latest successful percentages and reset times
 The system SHALL persist the latest successful 5-hour and weekly remaining percentages, reset times, and refresh metadata into each account's SQLite record only from the unified usage refresh management path.
 
@@ -54,22 +44,4 @@ The system SHALL persist the latest successful 5-hour and weekly remaining perce
 #### Scenario: Usage refresh fails
 - **WHEN** a refresh cycle produces only an error or stale record for an account
 - **THEN** the system SHALL NOT overwrite the account's persisted SQLite usage percentages or reset times with zero, unknown, or error defaults
-
-### Requirement: Record refresh metadata
-The system SHALL store collection source, last refresh time, stale status, and error text for each usage record.
-
-#### Scenario: Usage record is returned
-- **WHEN** cached usage is exposed through the API
-- **THEN** each record SHALL include source, last refresh time, stale flag, and optional error text
-
-### Requirement: Avoid project-external usage cache files
-The system SHALL NOT create or depend on project-external usage cache files for durable couswee state.
-
-#### Scenario: Default configuration is loaded
-- **WHEN** couswee starts without explicit usage cache configuration
-- **THEN** the system SHALL NOT default to `~/.cache/abtop/codex-rate-limits.json` or `~/.cache/couswee/codex-rate-limits.json`
-
-#### Scenario: Usage refresh completes
-- **WHEN** usage refresh succeeds for one or more accounts
-- **THEN** the system SHALL persist durable results to SQLite and SHALL NOT write a separate usage cache file under `~/.cache`
 

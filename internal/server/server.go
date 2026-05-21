@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"couswee/internal/accounts"
@@ -18,18 +21,23 @@ import (
 
 type Config struct {
 	StaticDir string
+	StaticFS  fs.FS
 	Usage     *usage.Service
 }
 
+const DefaultAddr = "0.0.0.0:2199"
+
 type Server struct {
-	app     *fiber.App
-	service *accounts.Service
-	usage   *usage.Service
+	app                 *fiber.App
+	service             *accounts.Service
+	usage               *usage.Service
+	loginUsageMu        sync.Mutex
+	refreshedLoginUsage map[string]struct{}
 }
 
 func New(service *accounts.Service, cfg Config) *Server {
 	app := fiber.New(fiber.Config{AppName: "couswee"})
-	s := &Server{app: app, service: service, usage: cfg.Usage}
+	s := &Server{app: app, service: service, usage: cfg.Usage, refreshedLoginUsage: make(map[string]struct{})}
 	s.routes(cfg)
 	return s
 }
@@ -38,9 +46,13 @@ func (s *Server) App() *fiber.App { return s.app }
 
 func (s *Server) Listen(addr string) error {
 	if addr == "" {
-		addr = "127.0.0.1:2199"
+		addr = DefaultAddr
 	}
 	return s.app.Listen(addr)
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.app.ShutdownWithContext(ctx)
 }
 
 func (s *Server) routes(cfg Config) {
@@ -76,11 +88,65 @@ func (s *Server) routes(cfg Config) {
 				return c.Type("html").SendFile(fallbackPath)
 			})
 		}
+	} else if cfg.StaticFS != nil {
+		s.app.Get("*", embeddedStaticHandler(cfg.StaticFS))
 	} else {
 		s.app.Get("/", func(c *fiber.Ctx) error {
 			return c.Type("html").SendString(`<html><body><h1>couswee</h1><p>Frontend has not been built yet. Run npm run build.</p></body></html>`)
 		})
 	}
+}
+
+func embeddedStaticHandler(staticFS fs.FS) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if strings.HasPrefix(c.Path(), "/api/") {
+			return c.SendStatus(http.StatusNotFound)
+		}
+
+		name := strings.TrimPrefix(c.Path(), "/")
+		if name == "" {
+			name = "index.html"
+		}
+		if !fs.ValidPath(name) {
+			return c.SendStatus(http.StatusNotFound)
+		}
+
+		if served, err := sendEmbeddedFile(c, staticFS, name); err != nil {
+			return err
+		} else if served {
+			return nil
+		}
+		return sendEmbeddedFallback(c, staticFS)
+	}
+}
+
+func sendEmbeddedFile(c *fiber.Ctx, staticFS fs.FS, name string) (bool, error) {
+	info, err := fs.Stat(staticFS, name)
+	if err == nil && info.IsDir() {
+		name = filepath.ToSlash(filepath.Join(name, "index.html"))
+	}
+
+	file, err := staticFS.Open(name)
+	if err != nil {
+		return false, nil
+	}
+	defer file.Close()
+
+	if ext := filepath.Ext(name); ext != "" {
+		if contentType := mime.TypeByExtension(ext); contentType != "" {
+			c.Set(fiber.HeaderContentType, contentType)
+		}
+	}
+	return true, c.SendStream(file)
+}
+
+func sendEmbeddedFallback(c *fiber.Ctx, staticFS fs.FS) error {
+	file, err := staticFS.Open("fallback.html")
+	if err != nil {
+		return c.SendStatus(http.StatusNotFound)
+	}
+	defer file.Close()
+	return c.Type("html").SendStream(file)
 }
 
 func (s *Server) getAccounts(c *fiber.Ctx) error {
@@ -103,7 +169,21 @@ func (s *Server) postAccount(c *fiber.Ctx) error {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 	}
+	if s.usage != nil {
+		if s.usage.RefreshAccountWithReason(context.Background(), account.ID, usage.RefreshReasonAccountAdded) {
+			account = s.findAccount(account.ID, account)
+		}
+	}
 	return c.Status(http.StatusCreated).JSON(account)
+}
+
+func (s *Server) findAccount(selector string, fallback accounts.Account) accounts.Account {
+	for _, account := range s.service.Accounts() {
+		if account.ID == selector || account.Nickname == selector || account.ProfileName == selector {
+			return account
+		}
+	}
+	return fallback
 }
 
 func (s *Server) deleteAccounts(c *fiber.Ctx) error {
@@ -164,9 +244,7 @@ func (s *Server) postSwitch(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 	if s.usage != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		s.usage.RefreshAccount(ctx, account.ID)
+		s.usage.RefreshAccountWithReason(context.Background(), account.ID, usage.RefreshReasonAccountSwitch)
 	}
 	return c.JSON(account)
 }
@@ -220,7 +298,32 @@ func (s *Server) getLoginSession(c *fiber.Ctx) error {
 		}
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+	s.refreshLoginUsage(session)
 	return c.JSON(session)
+}
+
+func (s *Server) refreshLoginUsage(session accounts.LoginSession) {
+	if s.usage == nil || session.Status != accounts.LoginStatusSucceeded || strings.TrimSpace(session.AccountID) == "" {
+		return
+	}
+	sessionID := strings.TrimSpace(session.ID)
+	if sessionID == "" {
+		return
+	}
+	s.loginUsageMu.Lock()
+	if _, ok := s.refreshedLoginUsage[sessionID]; ok {
+		s.loginUsageMu.Unlock()
+		return
+	}
+	s.refreshedLoginUsage[sessionID] = struct{}{}
+	s.loginUsageMu.Unlock()
+
+	if s.usage.RefreshAccountWithReason(context.Background(), session.AccountID, usage.RefreshReasonLoginSuccess) {
+		return
+	}
+	s.loginUsageMu.Lock()
+	delete(s.refreshedLoginUsage, sessionID)
+	s.loginUsageMu.Unlock()
 }
 
 func (s *Server) postLoginCancel(c *fiber.Ctx) error {

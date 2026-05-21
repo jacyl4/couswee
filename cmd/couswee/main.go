@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"couswee/internal/accounts"
 	"couswee/internal/server"
 	"couswee/internal/usage"
 	"couswee/internal/version"
+	webassets "couswee/web"
 )
 
 func main() {
@@ -54,22 +56,38 @@ func run(args []string, stdout io.Writer) error {
 	usageCfg.ActiveAuthPath = service.CurrentAuthPath()
 	usageService := usage.NewService(usageCfg, usage.BuildCollector(usageCfg), service.Accounts)
 	usageService.SetAccountSink(service.ReplaceUsage)
-	usageService.RefreshAll(ctx)
+	usageService.RefreshAllWithReason(ctx, usage.RefreshReasonStartup)
 	usageService.Start(ctx)
 
 	addr := os.Getenv("COUSWEE_ADDR")
 	if addr == "" {
-		addr = "127.0.0.1:2199"
+		addr = server.DefaultAddr
 	}
 	staticDir := os.Getenv("COUSWEE_STATIC_DIR")
 	if staticDir == "" {
 		staticDir = "web/dist"
 	}
 
-	app := server.New(service, server.Config{StaticDir: staticDir, Usage: usageService})
+	app := server.New(service, server.Config{StaticDir: staticDir, StaticFS: webassets.FS(), Usage: usageService})
+	shutdownErr := make(chan error, 1)
+	go func() {
+		<-ctx.Done()
+		stop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdownErr <- app.Shutdown(shutdownCtx)
+	}()
+
 	log.Printf("couswee listening on http://%s", addr)
 	if err := app.Listen(addr); err != nil {
 		return err
+	}
+	select {
+	case err := <-shutdownErr:
+		if err != nil {
+			return fmt.Errorf("shutdown server: %w", err)
+		}
+	default:
 	}
 	return nil
 }

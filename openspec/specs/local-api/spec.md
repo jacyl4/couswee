@@ -4,11 +4,11 @@
 TBD - created by archiving change build-couswee-gui. Update Purpose after archive.
 ## Requirements
 ### Requirement: Serve local HTTP API
-The system SHALL serve a local GoFiber HTTP API on `127.0.0.1:2199` by default.
+The system SHALL serve a GoFiber HTTP API on `0.0.0.0:2199` by default so devices on the same trusted LAN can reach the dashboard.
 
 #### Scenario: Service starts
 - **WHEN** couswee starts with the default configuration
-- **THEN** the HTTP server SHALL listen on `127.0.0.1:2199`
+- **THEN** the HTTP server SHALL listen on `0.0.0.0:2199`
 
 ### Requirement: List accounts endpoint
 The system SHALL provide `GET /api/accounts` returning all configured accounts as JSON.
@@ -47,7 +47,7 @@ The system SHALL serve the built SvelteKit static frontend at `/` and static ass
 - **THEN** the system SHALL return the built dashboard frontend
 
 ### Requirement: Codex login APIs
-The system SHALL provide local-only APIs for starting and observing Codex account login flows.
+The system SHALL provide APIs for starting and observing Codex account login flows from the same trusted network surface as the dashboard.
 
 #### Scenario: Codex login starts
 - **WHEN** a client sends `POST /api/codex/login/start`
@@ -61,8 +61,20 @@ The system SHALL provide local-only APIs for starting and observing Codex accoun
 - **WHEN** a client sends `GET /api/codex/login/:session_id`
 - **THEN** the system SHALL return the current login session status without exposing token values
 
+#### Scenario: Login success refreshes usage
+- **WHEN** `GET /api/codex/login/:session_id` observes a succeeded login session with a newly created account id
+- **THEN** the system SHALL trigger an immediate Codex usage refresh for that account before or while returning the succeeded session response
+
 ### Requirement: SQLite account management APIs
-The system SHALL provide local-only APIs for creating, editing, deleting, listing, and switching SQLite-backed accounts.
+The system SHALL provide APIs for creating, editing, deleting, listing, and switching SQLite-backed accounts from the same trusted network surface as the dashboard.
+
+#### Scenario: Account is created
+- **WHEN** a client sends `POST /api/accounts` with valid account metadata
+- **THEN** the system SHALL create the SQLite account record and return the created account
+
+#### Scenario: Account creation refreshes usage
+- **WHEN** a client successfully creates an account through `POST /api/accounts`
+- **THEN** the system SHALL trigger an immediate Codex usage refresh for the newly created account before returning or immediately after returning the created account response
 
 #### Scenario: Account is edited
 - **WHEN** a client sends `PATCH /api/accounts/:id` with editable display metadata
@@ -75,4 +87,3 @@ The system SHALL provide local-only APIs for creating, editing, deleting, listin
 #### Scenario: Account switch remains compatible
 - **WHEN** a client sends existing `POST /api/switch` with a nickname
 - **THEN** the system SHALL continue to support the compatibility switch path using the SQLite account store
-

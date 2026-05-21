@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"couswee/internal/accounts"
 	"couswee/internal/usage"
@@ -46,6 +47,12 @@ func doReq(t *testing.T, srv *Server, method, path string, body io.Reader) *http
 	return resp
 }
 
+func TestDefaultAddrAllowsLANAccess(t *testing.T) {
+	if DefaultAddr != "0.0.0.0:2199" {
+		t.Fatalf("DefaultAddr = %q, want 0.0.0.0:2199", DefaultAddr)
+	}
+}
+
 func TestGetAccounts(t *testing.T) {
 	srv := testApp(t, []accounts.Account{{Nickname: "Dev1"}})
 	resp := doReq(t, srv, http.MethodGet, "/api/accounts", nil)
@@ -67,6 +74,49 @@ func TestPostAccountCreatesAccount(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte(`"nickname":"Dev1"`)) {
 		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestPostAccountRefreshesUsage(t *testing.T) {
+	home := t.TempDir()
+	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	accountService := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
+	var collected []string
+	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
+		collected = append(collected, account.Nickname)
+		return usage.UsageRecord{
+			Account:         account.Nickname,
+			Remaining5h:     63,
+			RemainingWeekly: 77,
+			Unit:            usage.UnitPercent,
+			Source:          usage.SourceAPI,
+		}, nil
+	}), accountService.Accounts)
+	usageService.SetAccountSink(accountService.ReplaceUsage)
+	srv := New(accountService, Config{StaticDir: t.TempDir(), Usage: usageService})
+
+	resp := doReq(t, srv, http.MethodPost, "/api/accounts", bytes.NewBufferString(`{"nickname":"Dev1","auth_path":"~/auth.json"}`))
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if len(collected) != 1 || collected[0] != "Dev1" {
+		t.Fatalf("collected = %#v, want only Dev1", collected)
+	}
+	var got accounts.Account
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage5h != 63 || got.UsageWeekly != 77 || got.UsageSource != usage.SourceAPI {
+		t.Fatalf("created account usage = %#v", got)
+	}
+	records := usageService.Records()
+	if len(records) != 1 || records[0].Account != "Dev1" {
+		t.Fatalf("records = %#v", records)
 	}
 }
 
@@ -275,6 +325,69 @@ func TestStaticFallbackDoesNotCatchAPI404(t *testing.T) {
 	}
 }
 
+func TestEmbeddedStaticServesFrontendWhenDirectoryMissing(t *testing.T) {
+	home := t.TempDir()
+	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	service := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
+	srv := New(service, Config{
+		StaticDir: filepath.Join(t.TempDir(), "missing"),
+		StaticFS: fstest.MapFS{
+			"index.html":    {Data: []byte("<html>embedded index</html>")},
+			"fallback.html": {Data: []byte("<html>embedded fallback</html>")},
+			"_app/env.js":   {Data: []byte("export {};")},
+		},
+	})
+
+	resp := doReq(t, srv, http.MethodGet, "/", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte("embedded index")) {
+		t.Fatalf("body = %s", body)
+	}
+
+	resp = doReq(t, srv, http.MethodGet, "/_app/env.js", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("asset status = %d", resp.StatusCode)
+	}
+}
+
+func TestEmbeddedStaticFallbackDoesNotCatchAPI404(t *testing.T) {
+	home := t.TempDir()
+	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	service := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
+	srv := New(service, Config{
+		StaticDir: filepath.Join(t.TempDir(), "missing"),
+		StaticFS: fstest.MapFS{
+			"fallback.html": {Data: []byte("<html>embedded fallback</html>")},
+		},
+	})
+
+	resp := doReq(t, srv, http.MethodGet, "/api/missing", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(body, []byte("embedded fallback")) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
 func TestGetCodexUsageRecords(t *testing.T) {
 	home := t.TempDir()
 	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
@@ -372,5 +485,60 @@ func TestLoginAPIsSQLite(t *testing.T) {
 	body, _ = io.ReadAll(resp.Body)
 	if !bytes.Contains(body, []byte(`"method":"device"`)) || bytes.Contains(body, []byte("refresh_token")) {
 		t.Fatalf("oauth compatibility body = %s", body)
+	}
+}
+
+func TestLoginStatusRefreshesUsageForSucceededAccount(t *testing.T) {
+	home := t.TempDir()
+	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Replace([]accounts.Account{{ID: "acc-1", Nickname: "Dev1", AuthPath: "~/auth.json"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateLoginSession(accounts.LoginSession{
+		ID:        "login-1",
+		Method:    accounts.LoginMethodDevice,
+		Status:    accounts.LoginStatusSucceeded,
+		AccountID: "acc-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accountService := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
+	var collected []string
+	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
+		collected = append(collected, account.ID)
+		return usage.UsageRecord{
+			Account:         account.Nickname,
+			Remaining5h:     41,
+			RemainingWeekly: 82,
+			Unit:            usage.UnitPercent,
+			Source:          usage.SourceAPI,
+		}, nil
+	}), accountService.Accounts)
+	usageService.SetAccountSink(accountService.ReplaceUsage)
+	srv := New(accountService, Config{StaticDir: t.TempDir(), Usage: usageService})
+
+	resp := doReq(t, srv, http.MethodGet, "/api/codex/login/login-1", nil)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if len(collected) != 1 || collected[0] != "acc-1" {
+		t.Fatalf("collected = %#v, want only acc-1", collected)
+	}
+	updated := accountService.Accounts()
+	if len(updated) != 1 || updated[0].Usage5h != 41 || updated[0].UsageWeekly != 82 || updated[0].UsageSource != usage.SourceAPI {
+		t.Fatalf("account usage = %#v", updated)
+	}
+
+	resp = doReq(t, srv, http.MethodGet, "/api/codex/login/login-1", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second status = %d", resp.StatusCode)
+	}
+	if len(collected) != 1 {
+		t.Fatalf("second status refreshed again: %#v", collected)
 	}
 }

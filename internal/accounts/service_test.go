@@ -213,11 +213,19 @@ func TestReplaceUsagePersistsChangedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewService(store, home, NoopUsageRefresher{})
-	if err := service.ReplaceUsage([]Account{{Nickname: "Dev1", Usage5h: 55, UsageWeekly: 66, ResetTime5h: "2026-05-20T23:00:00+08:00", ResetTimeWeekly: "2026-05-24T23:00:00+08:00"}}); err != nil {
+	if err := service.ReplaceUsage([]Account{{Nickname: "Dev1", Usage5h: 55, UsageWeekly: 66, ResetTime5h: "2026-05-20T23:00:00+08:00", ResetTimeWeekly: "2026-05-24T23:00:00+08:00", UsageSource: "api", UsageLastRefresh: "2026-05-21T00:00:00Z", UsageStale: true, UsageError: "temporary failure"}}); err != nil {
 		t.Fatalf("ReplaceUsage() error = %v", err)
 	}
 	accounts := store.Accounts()
-	if accounts[0].Nickname != "Dev1" || accounts[0].Usage5h != 55 || accounts[0].UsageWeekly != 66 || accounts[0].ResetTime5h == "" || accounts[0].ResetTimeWeekly == "" {
+	if accounts[0].Nickname != "Dev1" ||
+		accounts[0].Usage5h != 55 ||
+		accounts[0].UsageWeekly != 66 ||
+		accounts[0].ResetTime5h == "" ||
+		accounts[0].ResetTimeWeekly == "" ||
+		accounts[0].UsageSource != "api" ||
+		accounts[0].UsageLastRefresh == "" ||
+		!accounts[0].UsageStale ||
+		accounts[0].UsageError == "" {
 		t.Fatalf("Dev1 = %#v", accounts[0])
 	}
 	if accounts[1].Nickname != "Dev2" || accounts[1].Usage5h != 9 || accounts[1].UsageWeekly != 8 {

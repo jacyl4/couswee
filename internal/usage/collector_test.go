@@ -62,6 +62,26 @@ func TestReadCodexAuth(t *testing.T) {
 	}
 }
 
+func TestReadCodexAuthExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	authDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(authDir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"home-token","account_id":"acct_home"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := ReadCodexAuth("~/.codex/auth.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.AccessToken != "home-token" || auth.AccountID != "acct_home" {
+		t.Fatalf("unexpected auth %#v", auth)
+	}
+}
+
 func TestParseUsageRecord(t *testing.T) {
 	record, err := ParseUsageRecord([]byte(`{"account":"Dev1","5h_usage":1,"weekly_usage":2}`))
 	if err != nil {

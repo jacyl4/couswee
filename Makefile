@@ -19,14 +19,13 @@ frontend:
 
 build: frontend
 	mkdir -p $(DIST_DIR)
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(APP) ./cmd/couswee
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -tags embed_frontend -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(APP) ./cmd/couswee
 
 package: build
 	rm -rf $(PACKAGE_DIR)
-	mkdir -p $(PACKAGE_DIR)/web
+	mkdir -p $(PACKAGE_DIR)
 	cp $(DIST_DIR)/$(APP) $(PACKAGE_DIR)/$(APP)
-	cp -R web/dist $(PACKAGE_DIR)/web/dist
-	tar -C $(PACKAGE_DIR) -czf "$(DIST_DIR)/$(APP)-$(VERSION)-linux-amd64.tar.gz" $(APP) web
+	tar -C $(PACKAGE_DIR) -czf "$(DIST_DIR)/$(APP)-$(VERSION)-linux-amd64.tar.gz" $(APP)
 	sha256sum "$(DIST_DIR)/$(APP)-$(VERSION)-linux-amd64.tar.gz" > "$(DIST_DIR)/$(APP)-$(VERSION)-linux-amd64.tar.gz.sha256"
 
 test:

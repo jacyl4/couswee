@@ -53,6 +53,10 @@
   };
 
   type Tone = 'ok' | 'warn' | 'danger';
+  type RefreshScope = {
+    accounts?: boolean;
+    usage?: boolean;
+  };
 
   type DashboardAccount = {
     key: string;
@@ -107,8 +111,11 @@
   $: anyLoading = loadingAccounts || loadingUsage;
 
   onMount(() => {
-    void refreshAll();
-    timers = [window.setInterval(loadAccounts, 30_000), window.setInterval(loadUsage, 60_000)];
+    void refreshDashboard();
+    timers = [
+      window.setInterval(() => refreshDashboard({ accounts: true, usage: false }), 30_000),
+      window.setInterval(() => refreshDashboard({ accounts: false, usage: true }), 60_000)
+    ];
   });
 
   onDestroy(() => {
@@ -116,8 +123,13 @@
     if (loginPollTimer) window.clearInterval(loginPollTimer);
   });
 
-  async function refreshAll() {
-    await Promise.all([loadAccounts(), loadUsage()]);
+  async function refreshDashboard(scope: RefreshScope = {}) {
+    const refreshAccounts = scope.accounts ?? true;
+    const refreshUsage = scope.usage ?? true;
+    const jobs: Promise<void>[] = [];
+    if (refreshAccounts) jobs.push(loadAccounts());
+    if (refreshUsage) jobs.push(loadUsage());
+    await Promise.all(jobs);
   }
 
   async function loadAccounts() {
@@ -166,7 +178,7 @@
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error || `切换失败：HTTP ${response.status}`);
       }
-      await refreshAll();
+      await refreshDashboard();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : '切换账号失败';
     } finally {
@@ -316,7 +328,7 @@
       activeLogin = await response.json();
       if (['succeeded', 'failed', 'expired', 'cancelled'].includes(activeLogin.status)) {
         if (loginPollTimer) window.clearInterval(loginPollTimer);
-        await refreshAll();
+        await refreshDashboard();
       }
     } catch {
       // poll failure is non-fatal; next tick may recover.
@@ -365,7 +377,7 @@
       addForm = { nickname: '', auth_path: '', subscription: '' };
       manualImportOpen = false;
       addingAccount = false;
-      await refreshAll();
+      await refreshDashboard();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : '新增账号失败';
     }
@@ -399,7 +411,7 @@
         throw new Error(body.error || `保存账号失败：HTTP ${response.status}`);
       }
       editingKey = '';
-      await refreshAll();
+      await refreshDashboard();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : '保存账号失败';
     }
@@ -421,7 +433,7 @@
         throw new Error(body.error || `删除账号失败：HTTP ${response.status}`);
       }
       selectedKeys = new Set<string>();
-      await refreshAll();
+      await refreshDashboard();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : '删除账号失败';
     }

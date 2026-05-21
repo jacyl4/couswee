@@ -413,11 +413,22 @@ func (s *Service) ReplaceUsage(accounts []Account) error {
 			if !ok {
 				continue
 			}
-			if current[i].Usage5h != next.Usage5h || current[i].UsageWeekly != next.UsageWeekly || current[i].ResetTime5h != next.ResetTime5h || current[i].ResetTimeWeekly != next.ResetTimeWeekly {
+			if current[i].Usage5h != next.Usage5h ||
+				current[i].UsageWeekly != next.UsageWeekly ||
+				current[i].ResetTime5h != next.ResetTime5h ||
+				current[i].ResetTimeWeekly != next.ResetTimeWeekly ||
+				current[i].UsageSource != next.UsageSource ||
+				current[i].UsageLastRefresh != next.UsageLastRefresh ||
+				current[i].UsageStale != next.UsageStale ||
+				current[i].UsageError != next.UsageError {
 				current[i].Usage5h = next.Usage5h
 				current[i].UsageWeekly = next.UsageWeekly
 				current[i].ResetTime5h = next.ResetTime5h
 				current[i].ResetTimeWeekly = next.ResetTimeWeekly
+				current[i].UsageSource = next.UsageSource
+				current[i].UsageLastRefresh = next.UsageLastRefresh
+				current[i].UsageStale = next.UsageStale
+				current[i].UsageError = next.UsageError
 				current[i].UpdatedAt = nowRFC3339()
 				changed = true
 			}

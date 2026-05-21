@@ -25,15 +25,15 @@ The account list SHALL include separate 5-hour and weekly reset times for each a
 - **THEN** the corresponding account row SHALL display the formatted 5-hour reset time and weekly reset time in separate cells
 
 ### Requirement: Poll usage automatically
-The dashboard SHALL poll `/api/codex/usage` automatically and update the existing account list without a full page reload.
+The dashboard SHALL poll `/api/codex/usage` automatically as a cache-read operation and update the existing account list without a full page reload. The dashboard SHALL NOT implement its own backend write-refresh decision path.
 
 #### Scenario: Poll interval elapses
 - **WHEN** the frontend poll interval elapses
-- **THEN** the dashboard SHALL fetch updated usage records and refresh account-list usage fields without a full page reload
+- **THEN** the dashboard SHALL fetch updated cached usage records and refresh account-list usage fields without a full page reload
 
 #### Scenario: Switch completes
 - **WHEN** the frontend receives a successful account switch response
-- **THEN** the dashboard SHALL refresh account and usage data so the newly active account can show updated remaining traffic promptly
+- **THEN** the dashboard SHALL refresh account and usage views so the newly active account can show updated remaining traffic produced by the backend refresh manager
 
 ### Requirement: Show stale and error states inline
 The account list SHALL clearly show when an account usage record is stale, failed, or currently refreshing while retaining the last known percentage values.

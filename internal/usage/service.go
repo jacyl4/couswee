@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"couswee/internal/accounts"
@@ -12,6 +13,7 @@ type AccountSource func() []accounts.Account
 type AccountSink func([]accounts.Account) error
 
 type Service struct {
+	mu        sync.Mutex
 	cache     *Cache
 	collector Collector
 	accounts  AccountSource
@@ -49,16 +51,24 @@ func (s *Service) Records() []UsageRecord {
 }
 
 func (s *Service) Refresh(ctx context.Context) {
-	s.RefreshAll(ctx)
+	s.RefreshAllWithReason(ctx, RefreshReasonManual)
 }
 
 func (s *Service) RefreshAll(ctx context.Context) {
+	s.RefreshAllWithReason(ctx, RefreshReasonManual)
+}
+
+func (s *Service) RefreshAllWithReason(ctx context.Context, reason RefreshReason) {
 	if s == nil || s.accounts == nil || s.collector == nil {
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = ContextWithRefreshReason(ctx, reason)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	accountsList := s.accounts()
 	if len(accountsList) == 0 {
 		s.cache.Replace([]UsageRecord{})
@@ -73,12 +83,20 @@ func (s *Service) RefreshAll(ctx context.Context) {
 }
 
 func (s *Service) RefreshAccount(ctx context.Context, selector string) bool {
+	return s.RefreshAccountWithReason(ctx, selector, RefreshReasonManual)
+}
+
+func (s *Service) RefreshAccountWithReason(ctx context.Context, selector string, reason RefreshReason) bool {
 	if s == nil || s.accounts == nil || s.collector == nil {
 		return false
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = ContextWithRefreshReason(ctx, reason)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	accountsList := s.accounts()
 	for _, account := range accountsList {
 		if account.ID != selector && account.Nickname != selector && account.ProfileName != selector {
@@ -135,7 +153,7 @@ func (s *Service) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				s.RefreshAll(ctx)
+				s.RefreshAllWithReason(ctx, RefreshReasonPeriodic)
 			case <-ctx.Done():
 				return
 			}

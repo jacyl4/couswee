@@ -9,7 +9,7 @@
 
 - [x] 2.1 新增 `Makefile` 或等价脚本，参考 `paraspeech` 用 `-ldflags -X` 注入版本、commit 和构建时间
 - [x] 2.2 让发布构建入口先执行前端静态构建，再构建 `cmd/couswee` Linux amd64 二进制
-- [x] 2.3 决定并实现发布二进制的静态前端携带方式：优先评估 Go `embed`，否则在发布包中显式包含 `web/dist`
+- [x] 2.3 使用 Go `embed` 将发布构建生成的 `web/dist` 嵌入 couswee 二进制，保留 `COUSWEE_STATIC_DIR` 外部覆盖能力
 - [x] 2.4 更新 `.gitignore`，确保发布二进制、`dist/`、前端构建输出和缓存不被误提交
 
 ## 3. GitHub 自动发布

@@ -3,6 +3,8 @@ package usage
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -150,5 +152,52 @@ func TestServiceRefreshAccountOnlyCollectsMatchingAccount(t *testing.T) {
 	records := svc.Records()
 	if len(records) != 1 || records[0].Account != "Dev2" {
 		t.Fatalf("records = %#v", records)
+	}
+}
+
+func TestServiceSerializesRefreshActions(t *testing.T) {
+	var current int32
+	var maxConcurrent int32
+	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
+		running := atomic.AddInt32(&current, 1)
+		for {
+			max := atomic.LoadInt32(&maxConcurrent)
+			if running <= max || atomic.CompareAndSwapInt32(&maxConcurrent, max, running) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		atomic.AddInt32(&current, -1)
+		return UsageRecord{Account: account.Nickname, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
+	}), func() []accounts.Account { return []accounts.Account{{ID: "1", Nickname: "Dev1"}} })
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		svc.RefreshAccountWithReason(context.Background(), "1", RefreshReasonAccountSwitch)
+	}()
+	go func() {
+		defer wg.Done()
+		svc.RefreshAccountWithReason(context.Background(), "1", RefreshReasonLoginSuccess)
+	}()
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&maxConcurrent); got != 1 {
+		t.Fatalf("refresh actions ran concurrently: max = %d", got)
+	}
+}
+
+func TestServicePassesRefreshReasonToCollector(t *testing.T) {
+	var got RefreshReason
+	svc := NewService(DefaultConfig(), collectorFunc(func(ctx context.Context, account accounts.Account) (UsageRecord, error) {
+		got = RefreshReasonFromContext(ctx)
+		return UsageRecord{Account: account.Nickname, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
+	}), func() []accounts.Account { return []accounts.Account{{ID: "1", Nickname: "Dev1"}} })
+
+	svc.RefreshAccountWithReason(context.Background(), "1", RefreshReasonAccountAdded)
+
+	if got != RefreshReasonAccountAdded {
+		t.Fatalf("refresh reason = %q, want %q", got, RefreshReasonAccountAdded)
 	}
 }

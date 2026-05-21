@@ -5,7 +5,11 @@ couswee SHALL 提供单一构建入口，用于生成带版本信息的发布产
 
 #### Scenario: 构建发布二进制
 - **WHEN** 维护者执行发布构建命令并传入 `VERSION`
-- **THEN** 构建入口 SHALL 先生成 SvelteKit 静态前端产物，再构建 `cmd/couswee` 对应的 Linux amd64 二进制
+- **THEN** 构建入口 SHALL 先生成 SvelteKit 静态前端产物，再将该产物嵌入 `cmd/couswee` 对应的 Linux amd64 二进制
+
+#### Scenario: 单二进制服务前端
+- **WHEN** 用户在没有外部 `web/dist` 目录的环境中运行发布二进制
+- **THEN** couswee SHALL 使用嵌入式前端静态文件服务 dashboard
 
 #### Scenario: 查询构建入口版本
 - **WHEN** 维护者执行构建入口的版本目标

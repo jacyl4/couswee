@@ -2,7 +2,7 @@
 
 couswee 当前是 Go 后端加 SvelteKit 静态前端：`npm run build` 输出 `web/dist`，Go 入口为 `cmd/couswee/main.go`，本地服务默认读取 `COUSWEE_STATIC_DIR=web/dist`。项目已有 `package.json` 的 `0.1.0`，但 Go 二进制没有运行时版本包、`--version` 输出或 API 版本信息，也没有 `.github/workflows`。
 
-参考项目 `paraspeech` 的做法很轻量：`internal/version/version.go` 内置 `Version/Commit/BuildTime` 默认值，`Makefile` 用 `-ldflags -X` 注入 tag、commit 和构建时间，GitHub Actions 在 tag push 时运行 `make build VERSION=<tag>`，再打包 tar.gz 和 sha256 并创建 Release。couswee 可以复用这个思路，但构建流程需要先生成前端静态文件，再构建 Go 二进制。
+参考项目 `paraspeech` 的做法很轻量：`internal/version/version.go` 内置 `Version/Commit/BuildTime` 默认值，`Makefile` 用 `-ldflags -X` 注入 tag、commit 和构建时间，GitHub Actions 在 tag push 时运行 `make build VERSION=<tag>`，再打包 tar.gz 和 sha256 并创建 Release。couswee 可以复用这个思路，但构建流程需要先生成前端静态文件，再用 Go `embed` 将 `web/dist` 放入 Go 二进制。
 
 ## Goals / Non-Goals
 
@@ -45,11 +45,11 @@ couswee 当前是 Go 后端加 SvelteKit 静态前端：`npm run build` 输出 `
 
 CI 构建 Linux amd64 产物，打包为 `dist/couswee-<version>-linux-amd64.tar.gz`，内部至少包含 `couswee` 二进制。若 README 中需要离线说明，可以额外放入 `README.md` 或 `LICENSE`，但不要把开发缓存和前端中间产物单独发布。
 
-拒绝方案：发布 `web/dist` 目录让用户自行运行 Go 源码。原因是目标是可追踪的运行时二进制；前端静态内容应在构建时嵌入或随二进制服务路径一起明确处理。
+拒绝方案：发布 `web/dist` 目录让用户自行运行 Go 源码。原因是目标是可追踪的运行时二进制；前端静态内容应在构建时嵌入二进制，避免单文件运行时退回占位页。
 
-### Decision: 静态前端产物处理需在施工前二选一
+### Decision: 发布构建使用 Go `embed` 携带静态前端
 
-couswee 当前运行时默认从 `web/dist` 读取静态文件。发布二进制若只包含单文件，则需要在施工时引入 Go `embed` 或调整发布包把 `web/dist` 一并打包并设置默认路径。推荐优先评估 `embed`，因为它更符合单二进制发布体验。
+couswee 开发态仍可从 `web/dist` 读取静态文件，并允许通过 `COUSWEE_STATIC_DIR` 覆盖静态文件目录。发布构建使用 Go `embed` 将 `web/dist` 嵌入二进制；当外部目录不存在时，服务端回退到嵌入式前端。`go:embed` 使用 `all:dist`，确保 SvelteKit 的 `_app` 资源目录被包含。
 
 拒绝方案：发布包依赖用户手动运行 `npm run build`。原因是 Release 产物应开箱可运行，不能把前端构建责任留给最终用户。
 

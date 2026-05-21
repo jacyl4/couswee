@@ -130,6 +130,7 @@ func ReadCodexAuth(path string) (CodexAuth, error) {
 	if strings.TrimSpace(path) == "" {
 		return CodexAuth{}, fmt.Errorf("codex auth path is empty")
 	}
+	path = ExpandHome(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return CodexAuth{}, fmt.Errorf("read codex auth file: %w", err)
