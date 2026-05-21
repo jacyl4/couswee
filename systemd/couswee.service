@@ -1,0 +1,35 @@
+[Unit]
+Description=couswee local Codex account switcher
+Documentation=https://github.com/jacyl4/couswee
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# couswee stores account data under $HOME/.couswee and switches the active
+# Codex auth file at $HOME/.codex/auth.json. Run it as the same user that uses
+# Codex CLI if you want account switching to affect that user's shell sessions.
+User=jacyl4
+Group=jacyl4
+Environment=HOME=/home/jacyl4
+Environment=PATH=/usr/local/bin
+Environment=COUSWEE_ADDR=0.0.0.0:2199
+
+# Release binaries embed the frontend assets. Keep WorkingDirectory next to the
+# binary if you also deploy an external web/dist directory.
+WorkingDirectory=/home/jacyl4
+ExecStart=/usr/local/bin/couswee
+
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/jacyl4/.couswee /home/jacyl4/.codex
+
+[Install]
+WantedBy=multi-user.target
