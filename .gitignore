@@ -3,9 +3,11 @@
 .omx/
 .svelte-kit/
 .DS_Store
+/couswee
+dist/
 docs/
+graphify-out/
 node_modules/
+openspec/changes/*/.tmp/
 opensepc/
 web/dist/
-
-

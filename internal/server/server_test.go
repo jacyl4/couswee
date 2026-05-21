@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -202,6 +203,21 @@ func TestGetCodexUsageEmpty(t *testing.T) {
 	resp := doReq(t, srv, http.MethodGet, "/api/codex/usage", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestGetVersion(t *testing.T) {
+	srv := testApp(t, nil)
+	resp := doReq(t, srv, http.MethodGet, "/api/version", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var got map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["version"] != "dev" || got["commit"] != "none" || got["build_time"] != "unknown" {
+		t.Fatalf("version response = %#v", got)
 	}
 }
 

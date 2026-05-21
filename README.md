@@ -1,89 +1,191 @@
 # couswee
 
-couswee is a local GUI for monitoring multiple Codex accounts and switching the active account by replacing `~/.codex/auth.json` from a configured auth file.
+couswee 是一个本地运行的 Codex 多账号切换与剩余流量监测面板。它用 SQLite 管理账号元数据，通过切换账号时替换当前用户的 `~/.codex/auth.json` 来切换 Codex CLI 当前账号，并把 5h / weekly 限额按“剩余流量”语义展示在账号列表中。
 
-## Requirements
+每个账号的 `auth.json` 都是单独文件管理的：通过 couswee 登录生成的账号会保存到 `~/.couswee/profiles/<profile>/auth.json`；手动导入的账号会保留原认证文件路径。SQLite 只记录账号元数据和认证文件路径，不把多个账号合并进同一个认证文件。切换账号时，couswee 才会把目标账号对应的认证文件复制到 `~/.codex/auth.json`，作为 Codex CLI 当前活跃账号。
 
-- Go available at `/usr/local/go/bin/go` or on `PATH`
-- Node.js and npm
+## 功能概览
 
-## Account database
+- 多账号管理：新增、编辑、删除、选择账号，账号数据存储在 `~/.couswee/couswee.db`。
+- Codex 登录：从网页界面启动 `codex login --device-auth`，轮询登录会话状态，成功后写入受管账号配置。
+- 手动导入：兼容已有认证文件路径，导入后仍写入 SQLite，不再维护旧 JSON 注册表。
+- 一键切换：按账号 `id`、`nickname` 或 `profile_name` 选择目标账号，将对应认证文件复制到 `~/.codex/auth.json`。
+- 剩余流量监测：对每个账号读取认证令牌，查询 Codex / ChatGPT 用量接口，并展示 5h / weekly 的剩余百分比与重置时间。
+- 本地 API：GoFiber 提供账号、登录、切换、用量、健康检查和版本查询接口。
+- SvelteKit 前端：紧凑暗色仪表盘，账号列表内联展示剩余流量、状态、编辑和切换操作。
+- 发布产物：Release 包包含 `couswee` 二进制和 `web/dist` 前端静态文件，解压后可直接运行。
 
-couswee stores account metadata only in SQLite at `~/.couswee/couswee.db`. The service creates the database and schema automatically on startup.
+## 架构
 
-Add accounts from the web UI with one of these flows:
-
-- Web login
-- Device-code login
-- Manual auth-file import
-
-Manual import still records metadata in SQLite; it does not create or update any old registry file.
-
-## Development
-
-Install frontend dependencies:
-
-```bash
-npm install
+```text
+web/src/routes/+page.svelte
+        |
+        | JSON 接口
+        v
+internal/server        GoFiber 路由与静态文件服务
+        |
+        +-- internal/accounts   SQLite 账号存储、认证切换、登录会话
+        +-- internal/usage      用量采集、缓存、刷新服务
+        +-- internal/version    运行时版本元数据
 ```
 
-Build the SvelteKit frontend:
+主要入口：
+
+- `cmd/couswee/main.go`：启动本地服务、初始化账号存储、启动用量刷新服务。
+- `internal/server/server.go`：注册 `/api/*` 路由并服务前端静态文件。
+- `internal/accounts/`：账号模型、SQLite 存储、Codex 登录、受管账号配置、认证切换。
+- `internal/usage/`：API 采集器、备用命令采集器、会话日志兜底、内存缓存和持久化。
+- `web/src/routes/+page.svelte`：账号管理、登录流程、选择/删除/编辑、剩余流量 UI。
+- `openspec/`：已归档和当前变更的 OpenSpec 需求、设计和任务记录。
+
+## 快速开始
+
+从 GitHub Release 下载 Linux amd64 发布包和 sha256 校验文件：
 
 ```bash
-npm run build
+couswee-v0.1.0-linux-amd64.tar.gz
+couswee-v0.1.0-linux-amd64.tar.gz.sha256
 ```
 
-Run backend tests:
+校验下载文件：
 
 ```bash
-/usr/local/go/bin/go test ./...
+sha256sum -c couswee-v0.1.0-linux-amd64.tar.gz.sha256
 ```
 
-Run the local service:
+解压并进入目录：
 
 ```bash
-COUSWEE_STATIC_DIR=web/dist /usr/local/go/bin/go run ./cmd/couswee
+mkdir -p couswee-v0.1.0
+tar -C couswee-v0.1.0 -xzf couswee-v0.1.0-linux-amd64.tar.gz
+cd couswee-v0.1.0
 ```
 
-Open <http://127.0.0.1:2199>.
+运行：
+
+```bash
+./couswee
+```
+
+打开：
+
+```text
+http://127.0.0.1:2199
+```
+
+Release 包内包含 `web/dist`，默认即可服务前端。需要改监听地址时设置 `COUSWEE_ADDR`，例如 `COUSWEE_ADDR=127.0.0.1:2300 ./couswee`。
+
+## 数据与安全边界
+
+couswee 只在本机工作，默认数据位置如下：
+
+| 路径 | 用途 |
+| --- | --- |
+| `~/.couswee/couswee.db` | SQLite 主数据库，保存账号元数据、用量快照、登录会话 |
+| `~/.couswee/profiles/<profile>/auth.json` | 通过 couswee 登录生成的受管认证文件 |
+| `~/.couswee/login-sessions/<id>/home` | 临时 Codex 登录 HOME |
+| `~/.codex/auth.json` | Codex CLI 当前活跃账号，切换账号时被替换 |
+
+注意：
+
+- 认证令牌不会返回给前端。
+- 网页界面手动导入认证文件时只记录路径和元数据。
+- 切换账号时会复制目标认证文件到 `~/.codex/auth.json`。
+- 删除 couswee 管理的账号配置时，只删除 `~/.couswee/profiles/` 下的受管目录，避免误删外部认证文件。
+
+## 账号工作流
+
+### Codex 登录
+
+1. 在页面点击 `新增账号`。
+2. 选择 `Codex 登录`。
+3. couswee 启动 `codex login --device-auth`，读取验证 URL 和用户 code。
+4. 授权成功后，认证 JSON 写入 `~/.couswee/profiles/<profile>/auth.json`。
+5. 新账号写入 SQLite，并可在面板中切换。
+
+### 手动导入
+
+1. 在页面点击 `新增账号`。
+2. 打开 `手动导入`。
+3. 填写昵称、认证文件路径和可选订阅/备注。
+4. 保存后账号进入 SQLite，但原认证文件仍保留在原位置。
+
+### 切换账号
+
+点击账号卡片的 `切换` 按钮后，后端会：
+
+1. 按 `id`、`nickname` 或 `profile_name` 查找账号。
+2. 将该账号的认证文件复制到 `~/.codex/auth.json`。
+3. 更新 SQLite 中的 active 状态和 `last_used_at`。
+4. 刷新该账号的用量记录。
 
 ## API
 
-- `GET /api/accounts` returns all SQLite-backed accounts.
-- `POST /api/accounts` manually imports an account auth path into SQLite.
-- `PATCH /api/accounts/:id` edits non-secret account metadata.
-- `DELETE /api/accounts` deletes accounts by id or nickname.
-- `GET /api/current` returns the active account or 404.
-- `POST /api/switch` with `{ "nickname": "Dev1" }` or `{ "id": "..." }` switches the active account.
-- `POST /api/codex/login/start` starts a Codex device-code login session.
-- `POST /api/codex/login/oauth/start` and `POST /api/codex/login/device/start` remain compatibility aliases.
-- `GET /api/codex/login/:session_id` returns login status.
-- `POST /api/codex/login/:session_id/cancel` cancels a login session.
+所有接口默认服务在 `http://127.0.0.1:2199`。
 
-## Codex usage monitor
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/accounts` | 返回 SQLite 中的账号列表，会同步当前 `~/.codex/auth.json` 对应的激活状态 |
+| `POST` | `/api/accounts` | 手动导入账号，必填 `nickname` 和 `auth_path` |
+| `PATCH` | `/api/accounts/:id` | 编辑账号昵称、订阅/备注、状态等非敏感元数据 |
+| `DELETE` | `/api/accounts` | 按 `ids` 或 `nicknames` 批量删除账号 |
+| `GET` | `/api/current` | 返回当前激活账号，没有激活账号时返回 404 |
+| `POST` | `/api/switch` | 按 `{ "id": "..." }`、`{ "nickname": "..." }` 或 `{ "profile_name": "..." }` 切换账号 |
+| `POST` | `/api/codex/login/start` | 启动 Codex 设备码登录 |
+| `POST` | `/api/codex/login/oauth/start` | 兼容别名，行为同 `/api/codex/login/start` |
+| `POST` | `/api/codex/login/device/start` | 兼容别名，行为同 `/api/codex/login/start` |
+| `GET` | `/api/codex/login/:session_id` | 查询登录会话状态 |
+| `POST` | `/api/codex/login/:session_id/cancel` | 取消登录会话 |
+| `GET` | `/api/codex/usage` | 返回每个账号的 Codex 剩余流量记录 |
+| `GET` | `/api/version` | 返回运行版本、提交号和构建时间 |
+| `GET` | `/api/health` | 健康检查 |
 
-couswee merges live/cached usage records into the existing account list and also exposes them at:
+手动导入账号示例：
+
+```bash
+curl -X POST http://127.0.0.1:2199/api/accounts \
+  -H 'Content-Type: application/json' \
+  -d '{"nickname":"main","auth_path":"~/.codex-auth/main.json","subscription":"pro"}'
+```
+
+切换账号示例：
+
+```bash
+curl -X POST http://127.0.0.1:2199/api/switch \
+  -H 'Content-Type: application/json' \
+  -d '{"nickname":"main"}'
+```
+
+版本查询示例：
+
+```bash
+curl http://127.0.0.1:2199/api/version
+```
+
+## Codex 剩余流量监测
+
+couswee 将用量数据合并进账号列表，同时也通过 `/api/codex/usage` 暴露独立记录。
 
 ```bash
 curl http://127.0.0.1:2199/api/codex/usage
 ```
 
-Example response:
+示例响应：
 
 ```json
 [
   {
-    "account": "Dev1",
+    "account": "main",
     "5h_usage": 65,
     "weekly_usage": 42,
     "5h_remaining": 65,
     "weekly_remaining": 42,
-    "reset_time": "2026-05-14T00:00:00+08:00",
-    "5h_reset_time": "2026-05-14T00:00:00+08:00",
-    "weekly_reset_time": "2026-05-17T14:55:35+08:00",
+    "reset_time": "2026-05-14T00:00:00Z",
+    "5h_reset_time": "2026-05-14T00:00:00Z",
+    "weekly_reset_time": "2026-05-17T14:55:35Z",
     "usage_basis": "remaining",
     "unit": "percent",
-    "source": "abtop-cache",
+    "source": "api",
     "last_refresh": "2026-05-13T15:00:00Z",
     "stale": false,
     "error": ""
@@ -91,46 +193,86 @@ Example response:
 ]
 ```
 
-Configuration is via environment variables:
+字段语义：
 
-| Variable | Default | Description |
+- `5h_remaining` / `weekly_remaining` 是剩余百分比。
+- 兼容字段 `5h_usage` / `weekly_usage` 目前也承载剩余百分比，`usage_basis` 固定表达为 `remaining`。
+- `source` 表示来源，可能是 `api`、`fallback`、`codex-session`、`account` 或 `error`。
+- `stale: true` 表示当前记录来自旧缓存或账号内保存的上次成功值。
+
+### 采集顺序
+
+1. API 采集器：读取账号认证文件中的 `tokens.access_token`，请求 `COUSWEE_USAGE_API_URL`。
+2. 备用命令：如果设置了 `COUSWEE_USAGE_FALLBACK_CMD`，失败时执行本地命令。
+3. 会话日志兜底：如果设置了 `COUSWEE_USAGE_SESSION_GLOB`，解析 Codex CLI 会话日志中的 `payload.rate_limits`。
+4. 账号记录兜底：以上都失败时，使用 SQLite 中保存的上次成功百分比，并标记为过期数据。
+
+对于 Codex 限额载荷，couswee 会把 `used_percent` / `used_percentage` 转换为 `100 - used`，保持和 Codex CLI “剩余”一致的语义。
+
+### 用量环境变量
+
+| 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `COUSWEE_USAGE_REFRESH_INTERVAL` | `5m` | Usage refresh interval. Values are clamped to 1-5 minutes. |
-| `COUSWEE_USAGE_UNIT` | `percent` | Collector unit label. The account list renders 5h/weekly remaining traffic values as percentages only. |
-| `COUSWEE_USAGE_API_ENABLED` | `true` | Enable API collector. Set `false` to force local fallback. |
-| `COUSWEE_USAGE_API_URL` | `https://chatgpt.com/backend-api/wham/usage` | OpenAI/Codex usage or rate-limit endpoint. couswee reads the account auth JSON, sends `Authorization: Bearer <tokens.access_token>`, and appends `account`, `auth_path`, and `account_id` query parameters. |
-| `COUSWEE_USAGE_SESSION_GLOB` | empty | Optional diagnostic Codex CLI session log fallback for the account matching the live active auth file. Session events older than `last_used_at` are ignored. |
-| `COUSWEE_USAGE_FALLBACK_CMD` | empty | Optional local fallback command, such as an `openusage.sh`/`abtop` wrapper. couswee appends account nickname and auth path as arguments. If set, it takes precedence over cache-file fallback. |
-| `COUSWEE_USAGE_FALLBACK_TIMEOUT` | `20s` | Timeout for fallback command execution. |
+| `COUSWEE_USAGE_REFRESH_INTERVAL` | `5m` | 用量刷新间隔，实际值会被限制在 1-5 分钟 |
+| `COUSWEE_USAGE_UNIT` | `percent` | 用量单位标签，前端按百分比展示 |
+| `COUSWEE_USAGE_API_ENABLED` | `true` | 是否启用 API 采集器 |
+| `COUSWEE_USAGE_API_URL` | `https://chatgpt.com/backend-api/wham/usage` | 用量 / 限额接口 |
+| `COUSWEE_USAGE_SESSION_GLOB` | 空 | 可选 Codex 会话日志兜底，例如 `~/.codex/sessions/**/*.jsonl` |
+| `COUSWEE_USAGE_FALLBACK_CMD` | 空 | 可选本地备用命令，后端会追加账号昵称和认证文件路径参数 |
+| `COUSWEE_USAGE_FALLBACK_TIMEOUT` | `20s` | 备用命令超时时间 |
 
-Usage collection follows the abtop-style principle: it reads Codex local auth (`~/.codex/auth.json` for the active account, or the configured backup auth path for inactive accounts), uses `tokens.access_token` only as a Bearer credential for the ChatGPT usage endpoint, and parses returned usage/rate-limit data. For Codex rate-limit payloads, couswee converts `used_percent` / `used_percentage` to the same **remaining traffic percentage** shown by the CLI, such as `69% left`. It does **not** call a Codex model to measure usage, so the usage query itself is not a model-token inference request.
+备用命令应输出单个用量 JSON、用量 JSON 数组，或 abtop / Codex 限额风格对象。
 
-If no live API or command fallback succeeds, couswee uses explicitly enabled session-log fallback when permitted, then percentage values already present in the SQLite account record.
-
-### Validating a fallback command
-
-The fallback command should print a JSON usage record/array or an abtop-style rate-limit object. Minimal usage-record example:
+最小示例：
 
 ```json
-{"account":"Dev1","5h_usage":69,"weekly_usage":11,"5h_remaining":69,"weekly_remaining":11,"5h_reset_time":"2026-05-14T21:20:02+08:00","weekly_reset_time":"2026-05-17T14:55:35+08:00","usage_basis":"remaining","unit":"percent"}
+{"account":"main","5h_usage":69,"weekly_usage":11,"5h_remaining":69,"weekly_remaining":11,"usage_basis":"remaining","unit":"percent"}
 ```
 
-Test the command manually before enabling it:
+## 开发
+
+开发编译需要 Go、Node.js 与 npm。可选安装 Codex CLI，用于网页界面中的设备码登录流程。
+
+常用命令：
 
 ```bash
-/path/to/openusage-wrapper Dev1 ~/.codex/auth-dev1.json
+npm install
+npm run build
+npm run go:run
+npm test -- --run
+go test ./...
 ```
 
-Then run couswee with:
+`npm run go:run` 会使用本项目的 `.cache/` 作为 Go 缓存和 GOPATH，便于本地隔离。
+
+只跑后端：
 
 ```bash
-COUSWEE_USAGE_FALLBACK_CMD=/path/to/openusage-wrapper npm run go:run
+COUSWEE_STATIC_DIR=web/dist go run ./cmd/couswee
 ```
 
-### Troubleshooting usage data
+生成 graphify 结构图：
 
-- Empty list: add an account from the web UI, or verify `~/.couswee/couswee.db` is writable and restart couswee.
-- `stale: true`: the last refresh failed; check the `error` field for the account.
-- API failures: verify `COUSWEE_USAGE_API_URL`, network access, and the selected auth file contains `tokens.access_token`. couswee never prints the token value.
-- CLI/session fallback: verify `COUSWEE_USAGE_SESSION_GLOB` can see `~/.codex/sessions/**/*.jsonl`, those lines contain `payload.rate_limits`, the target account auth matches the live active auth file, and the latest usable event is newer than the account `last_used_at`.
-- Fallback failures: run the fallback command manually and ensure it prints valid JSON.
+```bash
+graphify update . --force
+```
+
+当前 graphify 输出在 `graphify-out/`，包含 `GRAPH_REPORT.md`、`graph.json` 和 `graph.html`。本 README 的功能梳理基于该结构图和源码核对。
+
+## 验证
+
+推荐在提交前运行：
+
+```bash
+npm test -- --run
+go test ./...
+openspec validate add-version-and-github-release --type change --strict
+```
+
+如需验证发布包：
+
+```bash
+make package VERSION=v0.1.0-test
+./dist/couswee --version
+sha256sum -c dist/couswee-v0.1.0-test-linux-amd64.tar.gz.sha256
+```

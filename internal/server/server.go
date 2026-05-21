@@ -11,6 +11,7 @@ import (
 
 	"couswee/internal/accounts"
 	"couswee/internal/usage"
+	"couswee/internal/version"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -55,6 +56,7 @@ func (s *Server) routes(cfg Config) {
 	s.app.Get("/api/codex/login/:session_id", s.getLoginSession)
 	s.app.Post("/api/codex/login/:session_id/cancel", s.postLoginCancel)
 	s.app.Get("/api/codex/usage", s.getCodexUsage)
+	s.app.Get("/api/version", s.getVersion)
 	s.app.Get("/api/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true, "time": time.Now().Format(time.RFC3339)})
 	})
@@ -174,6 +176,10 @@ func (s *Server) getCodexUsage(c *fiber.Ctx) error {
 		return c.JSON([]usage.UsageRecord{})
 	}
 	return c.JSON(s.usage.Records())
+}
+
+func (s *Server) getVersion(c *fiber.Ctx) error {
+	return c.JSON(version.Current())
 }
 
 func (s *Server) patchAccount(c *fiber.Ctx) error {
