@@ -38,7 +38,6 @@ internal/server        GoFiber 路由与静态文件服务
 - `internal/accounts/`：账号模型、SQLite 存储、Codex 登录、受管账号配置、认证切换。
 - `internal/usage/`：API 采集器、备用命令采集器、会话日志兜底、内存缓存和持久化。
 - `web/src/routes/+page.svelte`：账号管理、登录流程、选择/删除/编辑、剩余流量 UI。
-- `openspec/`：已归档和当前变更的 OpenSpec 需求、设计和任务记录。
 
 ## 快速开始
 
@@ -264,14 +263,6 @@ graphify update . --force
 当前 graphify 输出在 `graphify-out/`，包含 `GRAPH_REPORT.md`、`graph.json` 和 `graph.html`。本 README 的功能梳理基于该结构图和源码核对。
 
 ## 验证
-
-推荐在提交前运行：
-
-```bash
-npm test -- --run
-go test ./...
-openspec validate add-version-and-github-release --type change --strict
-```
 
 如需验证发布包：
 
