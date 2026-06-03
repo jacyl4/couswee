@@ -213,3 +213,29 @@ func TestServicePassesRefreshReasonToCollector(t *testing.T) {
 		t.Fatalf("refresh reason = %q, want %q", got, RefreshReasonAccountAdded)
 	}
 }
+
+func TestServicePersistsUsedBasisAsRemainingPercent(t *testing.T) {
+	var persisted []accounts.Account
+	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
+		return UsageRecord{
+			Account:     account.Nickname,
+			Usage5h:     100,
+			UsageWeekly: 25,
+			UsageBasis:  "used",
+			Unit:        UnitPercent,
+			Source:      SourceAPI,
+		}, nil
+	}), func() []accounts.Account {
+		return []accounts.Account{{Nickname: "Dev1", Usage5h: 99, UsageWeekly: 99}}
+	})
+	svc.SetAccountSink(func(updated []accounts.Account) error {
+		persisted = append([]accounts.Account(nil), updated...)
+		return nil
+	})
+
+	svc.Refresh(context.Background())
+
+	if len(persisted) != 1 || persisted[0].Usage5h != 0 || persisted[0].UsageWeekly != 75 {
+		t.Fatalf("persisted = %#v", persisted)
+	}
+}

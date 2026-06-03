@@ -75,6 +75,91 @@ var (
 	ansiPattern      = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 )
 
+func loginEnv(base []string, home, codexHome string) []string {
+	env := make([]string, 0, len(base)+2)
+	for _, value := range base {
+		if strings.HasPrefix(value, "HOME=") || strings.HasPrefix(value, "CODEX_HOME=") {
+			continue
+		}
+		env = append(env, value)
+	}
+	return append(env, "HOME="+home, "CODEX_HOME="+codexHome)
+}
+
+func mergeLoginOutput(start *LoginStart, line string) {
+	line = strings.TrimSpace(ansiPattern.ReplaceAllString(line, ""))
+	if line == "" {
+		return
+	}
+	if start.VerificationURL == "" {
+		if match := loginURLPattern.FindString(line); match != "" {
+			start.VerificationURL = strings.TrimRight(match, ".),]")
+		}
+	}
+	if start.UserCode == "" {
+		if match := loginCodeFromText(line); match != "" {
+			start.UserCode = match
+		}
+	}
+	if start.UserCode == "" && start.VerificationURL != "" {
+		if code := loginCodeFromURL(start.VerificationURL); code != "" {
+			start.UserCode = code
+		}
+	}
+}
+
+func loginCodeFromText(line string) string {
+	if match := loginCodePattern.FindString(line); match != "" {
+		return match
+	}
+	fields := strings.Fields(line)
+	for _, field := range fields {
+		candidate := strings.Trim(field, " .,;:()[]{}<>")
+		if looksLikeLoginCode(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func loginCodeFromURL(rawURL string) string {
+	for _, marker := range []string{"user_code=", "userCode=", "code="} {
+		idx := strings.Index(rawURL, marker)
+		if idx == -1 {
+			continue
+		}
+		candidate := rawURL[idx+len(marker):]
+		if cut := strings.IndexAny(candidate, "&#? "); cut >= 0 {
+			candidate = candidate[:cut]
+		}
+		candidate = strings.TrimSpace(candidate)
+		if looksLikeLoginCode(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func looksLikeLoginCode(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 6 || len(value) > 32 {
+		return false
+	}
+	hasAlphaNum := false
+	for _, r := range value {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasAlphaNum = true
+		case r >= '0' && r <= '9':
+			hasAlphaNum = true
+		case r == '-':
+		default:
+			return false
+		}
+	}
+	return hasAlphaNum && strings.Contains(value, "-")
+}
+
 func (r CodexLoginRunner) Start(ctx context.Context, sessionID string) (LoginStart, error) {
 	sessionHome := filepath.Join(r.Home, ".couswee", "login-sessions", sessionID, "home")
 	if err := os.MkdirAll(sessionHome, 0o700); err != nil {
@@ -88,8 +173,17 @@ func (r CodexLoginRunner) Start(ctx context.Context, sessionID string) (LoginSta
 	}
 
 	cmdCtx, cancel := context.WithCancel(ctx)
+	codexHome := IsolatedCodexHomePath(sessionHome)
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		cancel()
+		return LoginStart{}, fmt.Errorf("create codex home: %w", err)
+	}
+	if err := os.Chmod(codexHome, 0o700); err != nil {
+		cancel()
+		return LoginStart{}, fmt.Errorf("secure codex home: %w", err)
+	}
 	cmd := exec.CommandContext(cmdCtx, "codex", "login", "--device-auth")
-	cmd.Env = append(os.Environ(), "HOME="+sessionHome)
+	cmd.Env = loginEnv(os.Environ(), sessionHome, codexHome)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -116,7 +210,7 @@ func (r CodexLoginRunner) Start(ctx context.Context, sessionID string) (LoginSta
 
 	start := LoginStart{
 		ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
-		AuthPath:  CodexAuthPath(sessionHome),
+		AuthPath:  filepath.Join(codexHome, "auth.json"),
 		Done:      done,
 		Cancel:    cancelProcess,
 	}
@@ -128,17 +222,8 @@ func (r CodexLoginRunner) Start(ctx context.Context, sessionID string) (LoginSta
 	go func() {
 		sentReady := false
 		for scanner.Scan() {
-			line := ansiPattern.ReplaceAllString(scanner.Text(), "")
-			if start.VerificationURL == "" {
-				if match := loginURLPattern.FindString(line); match != "" {
-					start.VerificationURL = strings.TrimRight(match, ".),")
-				}
-			}
-			if start.UserCode == "" {
-				if match := loginCodePattern.FindString(line); match != "" {
-					start.UserCode = match
-				}
-			}
+			line := scanner.Text()
+			mergeLoginOutput(&start, line)
 			if !sentReady && start.VerificationURL != "" && start.UserCode != "" {
 				ready <- start
 				sentReady = true

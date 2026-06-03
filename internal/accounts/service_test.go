@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -324,5 +325,56 @@ func TestSyncActiveFromAuthFileMatchesAccountID(t *testing.T) {
 	}
 	if active != "Dev2" {
 		t.Fatalf("active markers = %#v", accounts)
+	}
+}
+
+func TestLoginEnvIsolatesCodexHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "session-home")
+	codexHome := IsolatedCodexHomePath(home)
+	env := loginEnv([]string{"HOME=/real/home", "CODEX_HOME=/real/codex", "PATH=/bin"}, home, codexHome)
+	seen := map[string]string{}
+	for _, value := range env {
+		if strings.HasPrefix(value, "HOME=") {
+			seen["HOME"] = strings.TrimPrefix(value, "HOME=")
+		}
+		if strings.HasPrefix(value, "CODEX_HOME=") {
+			seen["CODEX_HOME"] = strings.TrimPrefix(value, "CODEX_HOME=")
+		}
+	}
+	if seen["HOME"] != home || seen["CODEX_HOME"] != codexHome {
+		t.Fatalf("env = %#v", env)
+	}
+}
+
+func TestMergeLoginOutputParsesCurrentCodexDeviceFormat(t *testing.T) {
+	var start LoginStart
+	mergeLoginOutput(&start, "\x1b[94mhttps://auth.openai.com/codex/device\x1b[0m")
+	mergeLoginOutput(&start, "   \x1b[94m2614-ERVJL\x1b[0m")
+	if start.VerificationURL != "https://auth.openai.com/codex/device" || start.UserCode != "2614-ERVJL" {
+		t.Fatalf("start = %#v", start)
+	}
+}
+
+func TestMergeLoginOutputParsesEmbeddedUserCodeURL(t *testing.T) {
+	var start LoginStart
+	mergeLoginOutput(&start, "Open https://auth.openai.com/codex/device?user_code=ABCD-12345.")
+	if start.VerificationURL != "https://auth.openai.com/codex/device?user_code=ABCD-12345" || start.UserCode != "ABCD-12345" {
+		t.Fatalf("start = %#v", start)
+	}
+}
+
+func TestCodexAuthPathRespectsCodexHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", "~/custom-codex")
+	want := filepath.Join(home, "custom-codex", "auth.json")
+	if got := CodexAuthPath(home); got != want {
+		t.Fatalf("CodexAuthPath() = %q, want %q", got, want)
+	}
+}
+
+func TestIsolatedCodexHomePath(t *testing.T) {
+	home := t.TempDir()
+	if got, want := IsolatedCodexHomePath(home), filepath.Join(home, ".codex"); got != want {
+		t.Fatalf("IsolatedCodexHomePath() = %q, want %q", got, want)
 	}
 }

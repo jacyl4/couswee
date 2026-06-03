@@ -309,3 +309,27 @@ func TestSessionLogCollectorSkipsEventsBeforeLastSwitch(t *testing.T) {
 		t.Fatalf("Collect() error = %v, want ErrNoCollector", err)
 	}
 }
+
+func TestParseCurrentWhamUsageRecordWithCredits(t *testing.T) {
+	record, err := ParseUsageRecord([]byte(`{
+		"user_id": "user-redacted",
+		"account_id": "user-redacted",
+		"plan_type": "plus",
+		"rate_limit": {
+			"allowed": true,
+			"limit_reached": false,
+			"primary_window": {"used_percent": 8, "limit_window_seconds": 18000, "reset_after_seconds": 15683, "reset_at": 1780509758},
+			"secondary_window": {"used_percent": 45, "limit_window_seconds": 604800, "reset_after_seconds": 414512, "reset_at": 1780908587}
+		},
+		"credits": {"has_credits": false, "unlimited": false, "balance": "0"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Remaining5h != 92 || record.RemainingWeekly != 55 || record.UsageBasis != "remaining" || record.Unit != UnitPercent {
+		t.Fatalf("record = %#v", record)
+	}
+	if record.ResetTime5h == "" || record.ResetTimeWeekly == "" {
+		t.Fatalf("missing reset metadata: %#v", record)
+	}
+}

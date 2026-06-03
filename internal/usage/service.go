@@ -192,8 +192,8 @@ func (s *Service) persistUsage(accountsList []accounts.Account, records []UsageR
 		}
 		resetTimeWeekly := record.ResetTimeWeekly
 		if liveSuccess {
-			usage5h = int(math.Round(clampPercent(recordValue(record.Remaining5h, record.Usage5h))))
-			usageWeekly = int(math.Round(clampPercent(recordValue(record.RemainingWeekly, record.UsageWeekly))))
+			usage5h = int(math.Round(clampPercent(remainingPercent(record, record.Remaining5h, record.Usage5h))))
+			usageWeekly = int(math.Round(clampPercent(remainingPercent(record, record.RemainingWeekly, record.UsageWeekly))))
 		} else {
 			resetTime5h = next[i].ResetTime5h
 			resetTimeWeekly = next[i].ResetTimeWeekly
@@ -226,11 +226,14 @@ func (s *Service) persistUsage(accountsList []accounts.Account, records []UsageR
 	}
 }
 
-func recordValue(primary, fallback float64) float64 {
-	if primary != 0 {
-		return primary
+func remainingPercent(record UsageRecord, remaining, usage float64) float64 {
+	if record.UsageBasis == "used" {
+		return 100 - usage
 	}
-	return fallback
+	if remaining != 0 || usage == 0 {
+		return remaining
+	}
+	return usage
 }
 
 func clampPercent(value float64) float64 {

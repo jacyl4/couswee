@@ -13,7 +13,7 @@ Type=simple
 User=jacyl4
 Group=jacyl4
 Environment=HOME=/home/jacyl4
-Environment=PATH=/usr/local/bin
+Environment=PATH=/home/jacyl4/.nvm/versions/node/v24.15.0/bin:/usr/local/bin:/usr/bin:/bin
 Environment=COUSWEE_ADDR=0.0.0.0:2199
 
 # Release binaries embed the frontend assets. Keep WorkingDirectory next to the
