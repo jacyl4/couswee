@@ -203,6 +203,9 @@ func (s *Server) deleteAccounts(c *fiber.Ctx) error {
 		}
 		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+	if s.usage != nil {
+		s.usage.PruneCurrentAccounts()
+	}
 	return c.JSON(fiber.Map{"deleted": deleted})
 }
 

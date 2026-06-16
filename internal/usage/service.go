@@ -47,7 +47,17 @@ func (s *Service) Records() []UsageRecord {
 	if s == nil || s.cache == nil {
 		return []UsageRecord{}
 	}
+	if s.accounts != nil {
+		return s.cache.SnapshotAllowed(accountKeys(s.accounts()))
+	}
 	return s.cache.Snapshot()
+}
+
+func (s *Service) PruneCurrentAccounts() {
+	if s == nil || s.cache == nil || s.accounts == nil {
+		return
+	}
+	s.cache.Prune(accountKeys(s.accounts()))
 }
 
 func (s *Service) Refresh(ctx context.Context) {
@@ -267,4 +277,16 @@ func BuildCollector(cfg Config) Collector {
 
 func cfgUnitOrPercent() string {
 	return UnitPercent
+}
+
+func accountKeys(accountsList []accounts.Account) map[string]struct{} {
+	keys := make(map[string]struct{}, len(accountsList))
+	for _, account := range accountsList {
+		key := accountIdentity(account)
+		if key == "" {
+			continue
+		}
+		keys[key] = struct{}{}
+	}
+	return keys
 }

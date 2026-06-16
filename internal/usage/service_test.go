@@ -21,6 +21,63 @@ func TestCacheSnapshotIsolation(t *testing.T) {
 	}
 }
 
+func TestServiceRecordsOnlyCurrentAccounts(t *testing.T) {
+	current := []accounts.Account{{ID: "1", Nickname: "Dev1", ProfileName: "dev-1"}}
+	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
+		return UsageRecord{Account: account.ProfileName, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
+	}), func() []accounts.Account { return append([]accounts.Account(nil), current...) })
+
+	svc.Refresh(context.Background())
+	current = []accounts.Account{}
+
+	if records := svc.Records(); len(records) != 0 {
+		t.Fatalf("records after account removal = %#v, want empty", records)
+	}
+}
+
+func TestServicePruneCurrentAccountsRemovesDeletedUsage(t *testing.T) {
+	current := []accounts.Account{{ID: "1", Nickname: "Dev1", ProfileName: "dev-1"}, {ID: "2", Nickname: "Dev2", ProfileName: "dev-2"}}
+	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
+		return UsageRecord{Account: account.ProfileName, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
+	}), func() []accounts.Account { return append([]accounts.Account(nil), current...) })
+
+	svc.Refresh(context.Background())
+	current = []accounts.Account{{ID: "2", Nickname: "Dev2", ProfileName: "dev-2"}}
+	svc.PruneCurrentAccounts()
+
+	records := svc.Records()
+	if len(records) != 1 || records[0].Account != "dev-2" {
+		t.Fatalf("records after prune = %#v, want only dev-2", records)
+	}
+}
+
+func TestServiceReaddedAccountDoesNotReuseDeletedCache(t *testing.T) {
+	current := []accounts.Account{{ID: "old", Nickname: "Dev", ProfileName: "dev-main", Usage5h: 0, UsageWeekly: 0}}
+	fail := false
+	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
+		if fail {
+			return UsageRecord{}, errors.New("boom")
+		}
+		return UsageRecord{Account: account.ProfileName, Usage5h: 91, UsageWeekly: 92, Unit: UnitPercent, Source: SourceAPI}, nil
+	}), func() []accounts.Account { return append([]accounts.Account(nil), current...) })
+
+	svc.Refresh(context.Background())
+	current = []accounts.Account{}
+	svc.PruneCurrentAccounts()
+
+	current = []accounts.Account{{ID: "new", Nickname: "Dev", ProfileName: "dev-main", Usage5h: 0, UsageWeekly: 0}}
+	fail = true
+	svc.RefreshAccountWithReason(context.Background(), "new", RefreshReasonAccountAdded)
+
+	records := svc.Records()
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want one stale record for re-added account", records)
+	}
+	if records[0].Usage5h == 91 || records[0].UsageWeekly == 92 || !records[0].Stale || records[0].Error == "" {
+		t.Fatalf("re-added account reused deleted cache: %#v", records[0])
+	}
+}
+
 func TestServiceRefreshSuccess(t *testing.T) {
 	svc := NewService(DefaultConfig(), collectorFunc(func(context.Context, accounts.Account) (UsageRecord, error) {
 		return UsageRecord{Account: "Dev1", Usage5h: 3, Unit: UnitTokens, Source: SourceAPI}, nil
@@ -136,11 +193,16 @@ func TestServiceDoesNotPersistAccountFallbackToAccountSink(t *testing.T) {
 
 func TestServiceRefreshAccountOnlyCollectsMatchingAccount(t *testing.T) {
 	var collected []string
+	var persisted []accounts.Account
 	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
 		collected = append(collected, account.ProfileName)
-		return UsageRecord{Account: account.ProfileName, Usage5h: 3, Unit: UnitPercent, Source: SourceAPI}, nil
+		return UsageRecord{Account: account.ProfileName, Remaining5h: 31, RemainingWeekly: 32, Unit: UnitPercent, Source: SourceAPI}, nil
 	}), func() []accounts.Account {
 		return []accounts.Account{{ID: "1", Nickname: "Dev", ProfileName: "dev-main"}, {ID: "2", Nickname: "Dev", ProfileName: "dev-backup"}}
+	})
+	svc.SetAccountSink(func(updated []accounts.Account) error {
+		persisted = append([]accounts.Account(nil), updated...)
+		return nil
 	})
 
 	if !svc.RefreshAccount(context.Background(), "dev-backup") {
@@ -152,6 +214,9 @@ func TestServiceRefreshAccountOnlyCollectsMatchingAccount(t *testing.T) {
 	records := svc.Records()
 	if len(records) != 1 || records[0].Account != "dev-backup" {
 		t.Fatalf("records = %#v", records)
+	}
+	if len(persisted) != 2 || persisted[0].Usage5h != 0 || persisted[1].Usage5h != 31 || persisted[1].UsageWeekly != 32 {
+		t.Fatalf("persisted = %#v", persisted)
 	}
 }
 

@@ -21,6 +21,19 @@ func (c *Cache) Snapshot() []UsageRecord {
 	return out
 }
 
+func (c *Cache) SnapshotAllowed(allowed map[string]struct{}) []UsageRecord {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]UsageRecord, 0, len(c.records))
+	for key, record := range c.records {
+		if _, ok := allowed[key]; !ok {
+			continue
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
 func (c *Cache) Replace(records []UsageRecord) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -36,6 +49,16 @@ func (c *Cache) Merge(records []UsageRecord) {
 	defer c.mu.Unlock()
 	for _, record := range records {
 		c.records[record.Account] = record
+	}
+}
+
+func (c *Cache) Prune(allowed map[string]struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range c.records {
+		if _, ok := allowed[key]; !ok {
+			delete(c.records, key)
+		}
 	}
 }
 

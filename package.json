@@ -9,7 +9,8 @@
     "preview": "vite preview --host 127.0.0.1",
     "go:test": "GOCACHE=$PWD/.cache/go-build GOPATH=$PWD/.cache/go-path /usr/local/go/bin/go test ./...",
     "go:run": "COUSWEE_STATIC_DIR=web/dist GOCACHE=$PWD/.cache/go-build GOPATH=$PWD/.cache/go-path /usr/local/go/bin/go run ./cmd/couswee",
-    "test": "npm run build && npm run go:test"
+    "test": "npm run build && npm run go:test",
+    "web:unit": "node --test web/src/lib/*.test.js"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",

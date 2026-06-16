@@ -144,6 +144,38 @@ func TestDeleteAccounts(t *testing.T) {
 	}
 }
 
+func TestDeleteAccountsPrunesUsageCache(t *testing.T) {
+	home := t.TempDir()
+	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Replace([]accounts.Account{{ID: "acc-1", Nickname: "Dev1", ProfileName: "dev-1"}, {ID: "acc-2", Nickname: "Dev2", ProfileName: "dev-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	accountService := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
+	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
+		return usage.UsageRecord{Account: account.ProfileName, Remaining5h: 70, RemainingWeekly: 80, Unit: usage.UnitPercent, Source: usage.SourceAPI}, nil
+	}), accountService.Accounts)
+	usageService.Refresh(context.Background())
+	srv := New(accountService, Config{StaticDir: t.TempDir(), Usage: usageService})
+
+	resp := doReq(t, srv, http.MethodDelete, "/api/accounts", bytes.NewBufferString(`{"profile_names":["dev-1"]}`))
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete status = %d body=%s", resp.StatusCode, body)
+	}
+	resp = doReq(t, srv, http.MethodGet, "/api/codex/usage", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("usage status = %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(body, []byte(`"account":"dev-1"`)) || !bytes.Contains(body, []byte(`"account":"dev-2"`)) {
+		t.Fatalf("usage body = %s", body)
+	}
+}
+
 func TestGetCurrentNotFound(t *testing.T) {
 	srv := testApp(t, []accounts.Account{{Nickname: "Dev1"}})
 	resp := doReq(t, srv, http.MethodGet, "/api/current", nil)

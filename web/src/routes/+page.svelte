@@ -1,5 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import {
+    accountRecordKey,
+    accountUsageKey,
+    availableCount as countAvailable,
+    clampPercent,
+    labelFor,
+    pruneSelection as pruneSelectedKeys,
+    suggestedSwitchCount as countSuggestedSwitch,
+    toneFor
+  } from '$lib/dashboard.js';
 
   type Account = {
     id?: string;
@@ -105,8 +115,8 @@
   $: usageByAccount = new Map(usageRecords.map((record) => [record.account, record]));
   $: dashboardAccounts = accounts.map((account) => toDashboardAccount(account, usageByAccount, selectedKeys, refreshingUsageKeys));
   $: selectedCount = selectedKeys.size;
-  $: availableCount = accounts.length;
-  $: suggestedSwitchCount = dashboardAccounts.filter((item) => item.tone === 'warn').length;
+  $: availableCount = countAvailable(dashboardAccounts);
+  $: suggestedSwitchCount = countSuggestedSwitch(dashboardAccounts);
   $: lastSyncLabel = formatRelativeTime(latestRefresh(usageRecords));
   $: anyLoading = loadingAccounts || loadingUsage;
 
@@ -200,7 +210,7 @@
     selectedSet: Set<string>,
     refreshingSet: Set<string>
   ): DashboardAccount {
-    const usage = usageMap.get(accountKey(account));
+    const usage = usageMap.get(accountUsageKey(account));
     const remaining5h = remaining(account, usage, '5h_remaining');
     const remainingWeekly = remaining(account, usage, 'weekly_remaining');
     const tone = toneFor(remaining5h, remainingWeekly);
@@ -227,23 +237,6 @@
     return clampPercent(record?.[field] ?? record?.[legacyField] ?? fallback ?? 0);
   }
 
-  function clampPercent(value: number) {
-    return Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
-  }
-
-  function toneFor(remaining5h: number, remainingWeekly: number): Tone {
-    if (remaining5h <= 0) return 'danger';
-    if (remainingWeekly <= 25 && remaining5h <= 50) return 'warn';
-    if (remainingWeekly > 25 && remaining5h <= 25) return 'warn';
-    return 'ok';
-  }
-
-  function labelFor(tone: Tone) {
-    if (tone === 'danger') return '冷却中';
-    if (tone === 'warn') return '接近用尽';
-    return '可用';
-  }
-
   function loginStatusLabel(status = 'ready') {
     if (status === 'active') return '';
     if (status === 'login_pending') return '登录中';
@@ -265,7 +258,7 @@
   }
 
   function accountKey(account: Account) {
-    return account.profile_name || account.id || account.nickname;
+    return accountRecordKey(account);
   }
 
   function toggleSelected(account: Account) {
@@ -277,8 +270,7 @@
   }
 
   function pruneSelection() {
-    const valid = new Set(accounts.map(accountKey));
-    selectedKeys = new Set([...selectedKeys].filter((key) => valid.has(key)));
+    selectedKeys = pruneSelectedKeys(selectedKeys, accounts);
   }
 
   function openAddAccount() {
