@@ -19,10 +19,11 @@ const (
 )
 
 const (
-	MinRefreshInterval      = time.Minute
-	DefaultRefreshInterval  = 5 * time.Minute
-	MaxRefreshInterval      = 5 * time.Minute
-	DefaultCodexUsageAPIURL = "https://chatgpt.com/backend-api/wham/usage"
+	MinRefreshInterval        = time.Minute
+	DefaultRefreshInterval    = 5 * time.Minute
+	MaxRefreshInterval        = 5 * time.Minute
+	DefaultAuthRefreshTimeout = 30 * time.Second
+	DefaultCodexUsageAPIURL   = "https://chatgpt.com/backend-api/wham/usage"
 )
 
 type UsageRecord struct {
@@ -43,23 +44,27 @@ type UsageRecord struct {
 }
 
 type Config struct {
-	RefreshInterval time.Duration
-	Unit            string
-	APIEnabled      bool
-	APIURL          string
-	FallbackCommand string
-	FallbackTimeout time.Duration
-	SessionGlob     string
-	ActiveAuthPath  string
+	RefreshInterval    time.Duration
+	Unit               string
+	APIEnabled         bool
+	APIURL             string
+	AuthRefreshEnabled bool
+	AuthRefreshTimeout time.Duration
+	FallbackCommand    string
+	FallbackTimeout    time.Duration
+	SessionGlob        string
+	ActiveAuthPath     string
 }
 
 func DefaultConfig() Config {
 	return Config{
-		RefreshInterval: DefaultRefreshInterval,
-		Unit:            UnitPercent,
-		APIEnabled:      true,
-		APIURL:          DefaultCodexUsageAPIURL,
-		FallbackTimeout: 20 * time.Second,
+		RefreshInterval:    DefaultRefreshInterval,
+		Unit:               UnitPercent,
+		APIEnabled:         true,
+		APIURL:             DefaultCodexUsageAPIURL,
+		AuthRefreshEnabled: true,
+		AuthRefreshTimeout: DefaultAuthRefreshTimeout,
+		FallbackTimeout:    20 * time.Second,
 	}
 }
 
@@ -82,6 +87,16 @@ func ConfigFromEnv() Config {
 			cfg.APIEnabled = enabled
 		}
 	}
+	if rawAuthRefreshEnabled := strings.TrimSpace(os.Getenv("COUSWEE_USAGE_AUTH_REFRESH_ENABLED")); rawAuthRefreshEnabled != "" {
+		if enabled, err := strconv.ParseBool(rawAuthRefreshEnabled); err == nil {
+			cfg.AuthRefreshEnabled = enabled
+		}
+	}
+	if timeout := strings.TrimSpace(os.Getenv("COUSWEE_USAGE_AUTH_REFRESH_TIMEOUT")); timeout != "" {
+		if d, err := time.ParseDuration(timeout); err == nil {
+			cfg.AuthRefreshTimeout = d
+		}
+	}
 	cfg.FallbackCommand = strings.TrimSpace(os.Getenv("COUSWEE_USAGE_FALLBACK_CMD"))
 	cfg.SessionGlob = ExpandHome(os.Getenv("COUSWEE_USAGE_SESSION_GLOB"))
 	if timeout := strings.TrimSpace(os.Getenv("COUSWEE_USAGE_FALLBACK_TIMEOUT")); timeout != "" {
@@ -95,6 +110,9 @@ func ConfigFromEnv() Config {
 	}
 	if cfg.FallbackTimeout <= 0 {
 		cfg.FallbackTimeout = 20 * time.Second
+	}
+	if cfg.AuthRefreshTimeout <= 0 {
+		cfg.AuthRefreshTimeout = DefaultAuthRefreshTimeout
 	}
 	return cfg
 }

@@ -454,6 +454,17 @@ button {
   font-size: 0.9rem;
 }
 
+.identity-copy .auth-state {
+  margin-top: 5px;
+  color: var(--green);
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+.identity-copy .auth-state.danger {
+  color: var(--red);
+}
+
 .usage-block {
   z-index: 1;
   display: grid;

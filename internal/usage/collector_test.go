@@ -2,6 +2,8 @@ package usage
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -62,6 +64,22 @@ func TestReadCodexAuth(t *testing.T) {
 	}
 }
 
+func TestReadCodexAuthMetadata(t *testing.T) {
+	exp := time.Unix(1783440824, 0).UTC()
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	body := `{"last_refresh":"2026-07-07T10:00:00Z","tokens":{"access_token":"` + testJWTExp(t, exp) + `","refresh_token":"refresh-abc","account_id":"acct_456"}}`
+	if err := os.WriteFile(authPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := ReadCodexAuth(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.RefreshToken != "refresh-abc" || auth.AccountID != "acct_456" || !auth.AccessTokenExpiresAt.Equal(exp) || auth.LastRefresh.IsZero() {
+		t.Fatalf("unexpected auth metadata %#v", auth)
+	}
+}
+
 func TestReadCodexAuthExpandsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -79,6 +97,84 @@ func TestReadCodexAuthExpandsHome(t *testing.T) {
 	}
 	if auth.AccessToken != "home-token" || auth.AccountID != "acct_home" {
 		t.Fatalf("unexpected auth %#v", auth)
+	}
+}
+
+type fakeAuthRefresher struct {
+	calls  int
+	update func(string) error
+	err    error
+}
+
+func (f *fakeAuthRefresher) RefreshCodexAuth(_ context.Context, authPath string) error {
+	f.calls++
+	if f.update != nil {
+		if err := f.update(authPath); err != nil {
+			return err
+		}
+	}
+	return f.err
+}
+
+func TestAPICollectorRefreshesExpiredAuthBeforeRequest(t *testing.T) {
+	now := time.Unix(1783400000, 0).UTC()
+	expired := testJWTExp(t, now.Add(-time.Hour))
+	fresh := testJWTExp(t, now.Add(time.Hour))
+	authPath := writeTestAuth(t, expired, "acct_123")
+	refresher := &fakeAuthRefresher{update: func(path string) error {
+		if path != authPath {
+			t.Fatalf("refresh path = %q, want %q", path, authPath)
+		}
+		return os.WriteFile(path, []byte(`{"tokens":{"access_token":"`+fresh+`","account_id":"acct_123"}}`), 0o600)
+	}}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.Header.Get("Authorization"); got != "Bearer "+fresh {
+			t.Fatalf("authorization header = %q", got)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"rate_limit":{"primary_window":{"used_percent":12},"secondary_window":{"used_percent":34}}}`)), Header: make(http.Header)}, nil
+	})}
+	_, err := (APICollector{URL: "https://usage.example.test", Client: client, Now: func() time.Time { return now }, AuthRefresher: refresher}).Collect(context.Background(), accounts.Account{Nickname: "Dev1", AuthPath: authPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refresher.calls != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refresher.calls)
+	}
+}
+
+func TestAPICollectorRefreshesAndRetriesOn401(t *testing.T) {
+	now := time.Unix(1783400000, 0).UTC()
+	oldToken := testJWTExp(t, now.Add(time.Hour))
+	newToken := testJWTExp(t, now.Add(2*time.Hour))
+	authPath := writeTestAuth(t, oldToken, "acct_123")
+	refresher := &fakeAuthRefresher{update: func(path string) error {
+		return os.WriteFile(path, []byte(`{"tokens":{"access_token":"`+newToken+`","account_id":"acct_123"}}`), 0o600)
+	}}
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		switch requests {
+		case 1:
+			if got := req.Header.Get("Authorization"); got != "Bearer "+oldToken {
+				t.Fatalf("first authorization header = %q", got)
+			}
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"token_expired","message":"expired"}}`)), Header: make(http.Header)}, nil
+		case 2:
+			if got := req.Header.Get("Authorization"); got != "Bearer "+newToken {
+				t.Fatalf("second authorization header = %q", got)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"rate_limit":{"primary_window":{"used_percent":22},"secondary_window":{"used_percent":42}}}`)), Header: make(http.Header)}, nil
+		default:
+			t.Fatalf("unexpected request %d", requests)
+			return nil, nil
+		}
+	})}
+	record, err := (APICollector{URL: "https://usage.example.test", Client: client, Now: func() time.Time { return now }, AuthRefresher: refresher}).Collect(context.Background(), accounts.Account{Nickname: "Dev1", AuthPath: authPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refresher.calls != 1 || requests != 2 || record.Remaining5h != 78 || record.RemainingWeekly != 58 {
+		t.Fatalf("calls=%d requests=%d record=%#v", refresher.calls, requests, record)
 	}
 }
 
@@ -121,6 +217,22 @@ func TestOrchestratorAllFail(t *testing.T) {
 	_, err := orchestrator.Collect(context.Background(), accounts.Account{Nickname: "Dev1"})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestOrchestratorAccountFallbackPreservesLiveError(t *testing.T) {
+	orchestrator := Orchestrator{
+		Primary: collectorFunc(func(context.Context, accounts.Account) (UsageRecord, error) {
+			return UsageRecord{}, errors.New("api failed")
+		}),
+		AccountFallback: AccountCollector{},
+	}
+	record, err := orchestrator.Collect(context.Background(), accounts.Account{Nickname: "Dev1", Usage5h: 44, UsageWeekly: 55})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Source != SourceAccount || !record.Stale || !strings.Contains(record.Error, "api failed") {
+		t.Fatalf("record = %#v", record)
 	}
 }
 
@@ -212,6 +324,16 @@ func writeTestAuth(t *testing.T, token, accountID string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func testJWTExp(t *testing.T, exp time.Time) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	payload, err := json.Marshal(map[string]int64{"exp": exp.Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }
 
 func TestSessionLogCollectorUsesLatestCodexRateLimitEvent(t *testing.T) {

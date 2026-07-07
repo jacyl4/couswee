@@ -80,3 +80,16 @@ func TestConfigFromEnvOverridesDefaultAPIURL(t *testing.T) {
 		t.Fatalf("unexpected API config: enabled=%v url=%q", cfg.APIEnabled, cfg.APIURL)
 	}
 }
+
+func TestConfigFromEnvCanDisableAuthRefresh(t *testing.T) {
+	t.Setenv("COUSWEE_USAGE_AUTH_REFRESH_ENABLED", "false")
+	t.Setenv("COUSWEE_USAGE_AUTH_REFRESH_TIMEOUT", "45s")
+
+	cfg := ConfigFromEnv()
+	if cfg.AuthRefreshEnabled {
+		t.Fatal("AuthRefreshEnabled = true, want false")
+	}
+	if cfg.AuthRefreshTimeout != 45*time.Second {
+		t.Fatalf("AuthRefreshTimeout = %s, want 45s", cfg.AuthRefreshTimeout)
+	}
+}

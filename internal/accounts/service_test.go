@@ -1,11 +1,14 @@
 package accounts
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeRefresher struct {
@@ -328,6 +331,149 @@ func TestSyncActiveFromAuthFileMatchesAccountID(t *testing.T) {
 	}
 }
 
+func TestSyncActiveFromAuthFileWritesFreshManagedProfile(t *testing.T) {
+	home := t.TempDir()
+	profile := NewProfileService(home)
+	managedPath, err := profile.WriteAuth("dev-two", []byte(`{"tokens":{"access_token":"backup-two","account_id":"acct_two"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeBody := `{"last_refresh":"2026-07-07T10:00:00Z","tokens":{"access_token":"live-two","account_id":"acct_two"}}`
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(CodexAuthPath(home), []byte(activeBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenSQLiteStore(DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Replace([]Account{{Nickname: "Dev1", AuthPath: filepath.Join(home, "missing.json"), Active: true}, {Nickname: "Dev2", ProfileName: "dev-two", AuthPath: managedPath}}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(store, home, NoopUsageRefresher{})
+	if err := service.SyncActiveFromAuthFile(); err != nil {
+		t.Fatalf("SyncActiveFromAuthFile() error = %v", err)
+	}
+	synced, err := os.ReadFile(managedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(synced) != activeBody {
+		t.Fatalf("managed auth = %s, want %s", synced, activeBody)
+	}
+	if got := store.Accounts()[1]; !got.Active || got.LastUsedAt == "" {
+		t.Fatalf("synced account = %#v", got)
+	}
+}
+
+func TestSyncActiveFromAuthFileCopiesManagedConfigFieldsToIdleProfiles(t *testing.T) {
+	home := t.TempDir()
+	profile := NewProfileService(home)
+	activePath, err := profile.WriteAuth("dev-one", []byte(`{"auth_mode":"old","tokens":{"access_token":"profile-active","account_id":"acct_active"},"last_refresh":"2026-01-01T00:00:00Z"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idlePath, err := profile.WriteAuth("dev-two", []byte(`{"auth_mode":"old","tokens":{"access_token":"idle-token","account_id":"acct_idle"},"last_refresh":"2026-01-02T00:00:00Z"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeBody := `{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"codex_schema":{"version":2},"tokens":{"access_token":"live-active","account_id":"acct_active"},"last_refresh":"2026-07-07T10:00:00Z"}`
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(CodexAuthPath(home), []byte(activeBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenSQLiteStore(DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Replace([]Account{{Nickname: "Dev1", ProfileName: "dev-one", AuthPath: activePath, Active: true}, {Nickname: "Dev2", ProfileName: "dev-two", AuthPath: idlePath}}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(store, home, NoopUsageRefresher{})
+	if err := service.SyncActiveFromAuthFile(); err != nil {
+		t.Fatalf("SyncActiveFromAuthFile() error = %v", err)
+	}
+	var idle map[string]any
+	readJSONFile(t, idlePath, &idle)
+	if idle["auth_mode"] != "chatgpt" {
+		t.Fatalf("auth_mode = %#v", idle["auth_mode"])
+	}
+	if _, ok := idle["codex_schema"].(map[string]any); !ok {
+		t.Fatalf("codex_schema missing from idle auth: %#v", idle)
+	}
+	tokens := idle["tokens"].(map[string]any)
+	if tokens["access_token"] != "idle-token" || tokens["account_id"] != "acct_idle" || idle["last_refresh"] != "2026-01-02T00:00:00Z" {
+		t.Fatalf("idle account-specific fields were not preserved: %#v", idle)
+	}
+}
+
+func TestSyncActiveFromAuthFileDoesNotCopyNonEmptySensitiveConfigFields(t *testing.T) {
+	home := t.TempDir()
+	profile := NewProfileService(home)
+	activePath, err := profile.WriteAuth("dev-one", []byte(`{"auth_mode":"old","tokens":{"access_token":"profile-active","account_id":"acct_active"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idlePath, err := profile.WriteAuth("dev-two", []byte(`{"auth_mode":"old","OPENAI_API_KEY":{"api_key":"idle-secret"},"tokens":{"access_token":"idle-token","account_id":"acct_idle"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeBody := `{"auth_mode":"chatgpt","OPENAI_API_KEY":{"api_key":"active-secret"},"tokens":{"access_token":"live-active","account_id":"acct_active"}}`
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(CodexAuthPath(home), []byte(activeBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenSQLiteStore(DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Replace([]Account{{Nickname: "Dev1", ProfileName: "dev-one", AuthPath: activePath, Active: true}, {Nickname: "Dev2", ProfileName: "dev-two", AuthPath: idlePath}}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(store, home, NoopUsageRefresher{})
+	if err := service.SyncActiveFromAuthFile(); err != nil {
+		t.Fatalf("SyncActiveFromAuthFile() error = %v", err)
+	}
+	var idle map[string]any
+	readJSONFile(t, idlePath, &idle)
+	apiKey := idle["OPENAI_API_KEY"].(map[string]any)
+	if apiKey["api_key"] != "idle-secret" {
+		t.Fatalf("sensitive config was overwritten: %#v", idle)
+	}
+}
+
+func TestAccountsAnnotatesExpiredAuth(t *testing.T) {
+	home := t.TempDir()
+	expiredAt := time.Now().Add(-time.Hour).UTC()
+	authPath := filepath.Join(home, "expired-auth.json")
+	body := `{"tokens":{"access_token":"` + testJWTExp(t, expiredAt) + `","account_id":"acct_expired"},"last_refresh":"2026-07-07T10:00:00Z"}`
+	if err := os.WriteFile(authPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenSQLiteStore(DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Replace([]Account{{Nickname: "Expired", AuthPath: authPath}}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(store, home, NoopUsageRefresher{})
+	got := service.Accounts()
+	if len(got) != 1 || got[0].AuthStatus != "expired" || !got[0].AuthExpired || got[0].AuthExpiresAt == "" || got[0].AuthLastRefresh == "" {
+		t.Fatalf("accounts = %#v", got)
+	}
+}
+
 func TestLoginEnvIsolatesCodexHome(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "session-home")
 	codexHome := IsolatedCodexHomePath(home)
@@ -377,4 +523,25 @@ func TestIsolatedCodexHomePath(t *testing.T) {
 	if got, want := IsolatedCodexHomePath(home), filepath.Join(home, ".codex"); got != want {
 		t.Fatalf("IsolatedCodexHomePath() = %q, want %q", got, want)
 	}
+}
+
+func readJSONFile(t *testing.T, path string, out any) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testJWTExp(t *testing.T, exp time.Time) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	payload, err := json.Marshal(map[string]int64{"exp": exp.Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }

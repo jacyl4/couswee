@@ -47,6 +47,16 @@ func doReq(t *testing.T, srv *Server, method, path string, body io.Reader) *http
 	return resp
 }
 
+func writeTestAuthFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"tokens":{"access_token":"test-token"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDefaultAddrAllowsLANAccess(t *testing.T) {
 	if DefaultAddr != "0.0.0.0:2199" {
 		t.Fatalf("DefaultAddr = %q, want 0.0.0.0:2199", DefaultAddr)
@@ -79,6 +89,7 @@ func TestPostAccountCreatesAccount(t *testing.T) {
 
 func TestPostAccountRefreshesUsage(t *testing.T) {
 	home := t.TempDir()
+	writeTestAuthFile(t, filepath.Join(home, "auth.json"))
 	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
 	if err != nil {
 		t.Fatal(err)
@@ -212,12 +223,8 @@ func TestPostSwitchRefreshesUsage(t *testing.T) {
 	home := t.TempDir()
 	src1 := filepath.Join(home, "auth1.json")
 	src2 := filepath.Join(home, "auth2.json")
-	if err := os.WriteFile(src1, []byte(`{"account":"one"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(src2, []byte(`{"account":"two"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestAuthFile(t, src1)
+	writeTestAuthFile(t, src2)
 	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
 	if err != nil {
 		t.Fatal(err)
@@ -258,12 +265,8 @@ func TestPostSwitchRefreshesActiveWithoutBlockingOnOtherAccounts(t *testing.T) {
 	home := t.TempDir()
 	src1 := filepath.Join(home, "auth1.json")
 	src2 := filepath.Join(home, "auth2.json")
-	if err := os.WriteFile(src1, []byte(`{"account":"one"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(src2, []byte(`{"account":"two"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestAuthFile(t, src1)
+	writeTestAuthFile(t, src2)
 	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
 	if err != nil {
 		t.Fatal(err)
@@ -530,6 +533,7 @@ func TestLoginAPIsSQLite(t *testing.T) {
 
 func TestLoginStatusRefreshesUsageForSucceededAccount(t *testing.T) {
 	home := t.TempDir()
+	writeTestAuthFile(t, filepath.Join(home, "auth.json"))
 	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
 	if err != nil {
 		t.Fatal(err)

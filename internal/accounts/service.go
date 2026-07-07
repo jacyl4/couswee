@@ -283,19 +283,28 @@ func (s *Service) UseCodexLoginRunner() {
 
 func (s *Service) Accounts() []Account {
 	_ = s.SyncActiveFromAuthFile()
-	return s.store.Accounts()
+	return s.withAuthState(s.store.Accounts())
 }
 
 func (s *Service) CurrentAuthPath() string { return s.authDestPath }
 
 func (s *Service) Current() (Account, error) {
 	_ = s.SyncActiveFromAuthFile()
-	for _, account := range s.store.Accounts() {
+	for _, account := range s.withAuthState(s.store.Accounts()) {
 		if account.Active {
 			return account, nil
 		}
 	}
 	return Account{}, ErrNoActiveAccount
+}
+
+func (s *Service) withAuthState(accounts []Account) []Account {
+	now := time.Now()
+	next := append([]Account(nil), accounts...)
+	for i := range next {
+		next[i] = enrichAuthState(next[i], s.home, now)
+	}
+	return next
 }
 
 func (s *Service) Add(account Account) (Account, error) {
@@ -382,6 +391,7 @@ func (s *Service) SwitchSelector(selector string) (Account, error) {
 		return Account{}, ErrAccountNotFound
 	}
 
+	_ = s.SyncActiveFromAuthFile()
 	accounts := s.store.Accounts()
 	targetIndex := -1
 	for i, account := range accounts {
@@ -426,6 +436,7 @@ func (s *Service) SyncActiveFromAuthFile() error {
 	currentAccountID := authAccountID(current)
 	accounts := s.store.Accounts()
 	matched := -1
+	var matchedCandidate []byte
 	for i, account := range accounts {
 		candidatePath := ExpandUserPath(account.AuthPath, s.home)
 		candidate, err := os.ReadFile(candidatePath)
@@ -435,11 +446,20 @@ func (s *Service) SyncActiveFromAuthFile() error {
 		if bytes.Equal(bytes.TrimSpace(current), bytes.TrimSpace(candidate)) ||
 			(currentAccountID != "" && currentAccountID == authAccountID(candidate)) {
 			matched = i
+			matchedCandidate = candidate
 			break
 		}
 	}
 	if matched == -1 {
 		return nil
+	}
+	if isManagedAuthPath(s.home, accounts[matched].AuthPath) && !bytes.Equal(bytes.TrimSpace(current), bytes.TrimSpace(matchedCandidate)) {
+		if err := copyFile(s.authDestPath, ExpandUserPath(accounts[matched].AuthPath, s.home)); err != nil {
+			return err
+		}
+	}
+	if err := s.syncManagedAuthConfigFields(current, accounts); err != nil {
+		return err
 	}
 	changed := false
 	observedAt := nowRFC3339()
@@ -459,6 +479,30 @@ func (s *Service) SyncActiveFromAuthFile() error {
 		return nil
 	}
 	return s.store.Replace(accounts)
+}
+
+func (s *Service) syncManagedAuthConfigFields(activeAuth []byte, accounts []Account) error {
+	for _, account := range accounts {
+		if !isManagedAuthPath(s.home, account.AuthPath) {
+			continue
+		}
+		path := ExpandUserPath(account.AuthPath, s.home)
+		current, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		next, changed, err := mergeCodexAuthConfigFields(activeAuth, current)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			continue
+		}
+		if err := writeFileAtomic(path, next); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func authAccountID(data []byte) string {

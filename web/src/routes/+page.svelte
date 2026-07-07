@@ -27,6 +27,11 @@
     usage_last_refresh?: string;
     usage_stale?: boolean;
     usage_error?: string;
+    auth_status?: string;
+    auth_expired?: boolean;
+    auth_expires_at?: string;
+    auth_last_refresh?: string;
+    auth_error?: string;
     active?: boolean;
     last_used_at?: string;
     last_switch_at?: string;
@@ -77,6 +82,9 @@
     tone: Tone;
     statusLabel: string;
     loginStatusLabel: string;
+    authExpired: boolean;
+    authStatusLabel: string;
+    authStatusDetail: string;
     selected: boolean;
     refreshingUsage: boolean;
     usageStale: boolean;
@@ -213,8 +221,11 @@
     const usage = usageMap.get(accountUsageKey(account));
     const remaining5h = remaining(account, usage, '5h_remaining');
     const remainingWeekly = remaining(account, usage, 'weekly_remaining');
-    const tone = toneFor(remaining5h, remainingWeekly);
+    const authExpired = isAuthExpired(account);
+    const authProblem = hasAuthProblem(account);
+    const tone = authProblem ? 'danger' : toneFor(remaining5h, remainingWeekly);
     const key = accountKey(account);
+    const usageError = visibleUsageError(account, usage?.error || account.usage_error || '');
     return {
       key,
       account,
@@ -222,12 +233,15 @@
       remaining5h,
       remainingWeekly,
       tone,
-      statusLabel: labelFor(tone),
-      loginStatusLabel: loginStatusLabel(account.status),
+      statusLabel: authExpired ? '认证过期' : labelFor(tone),
+      loginStatusLabel: authExpired ? '需要重新登录' : loginStatusLabel(account.status),
+      authExpired,
+      authStatusLabel: authStatusLabel(account),
+      authStatusDetail: authStatusDetail(account),
       selected: selectedSet.has(key),
       refreshingUsage: refreshingSet.has(key),
-      usageStale: Boolean(usage?.stale ?? account.usage_stale),
-      usageError: usage?.error || account.usage_error || ''
+      usageStale: authProblem ? false : Boolean(usage?.stale ?? account.usage_stale),
+      usageError
     };
   }
 
@@ -243,6 +257,47 @@
     if (status === 'login_failed') return '登录失败';
     if (status === 'disabled') return '已停用';
     return '已登录';
+  }
+
+  function isAuthExpired(account: Account) {
+    return Boolean(account.auth_expired || account.auth_status === 'expired');
+  }
+
+  function hasAuthProblem(account: Account) {
+    return isAuthExpired(account) || account.auth_status === 'missing' || account.auth_status === 'invalid';
+  }
+
+  function authStatusLabel(account: Account) {
+    if (isAuthExpired(account)) return '认证已过期';
+    if (account.auth_status === 'missing') return '认证文件缺失';
+    if (account.auth_status === 'invalid') return '认证文件异常';
+    if (account.auth_status === 'ready') return '认证有效';
+    return '';
+  }
+
+  function authStatusDetail(account: Account) {
+    if (!account.auth_expires_at) return '';
+    const date = new Date(account.auth_expires_at);
+    if (Number.isNaN(date.getTime())) return '';
+    const prefix = isAuthExpired(account) ? '过期于' : '有效至';
+    return `${prefix} ${date.toLocaleString('zh-CN')}`;
+  }
+
+  function visibleUsageError(account: Account, message = '') {
+    if (!message) return '';
+    if (hasAuthProblem(account)) return '';
+    if (isAuthRefreshError(message)) return '';
+    return message;
+  }
+
+  function isAuthRefreshError(message = '') {
+    const normalized = message.toLowerCase();
+    return normalized.includes('refresh codex auth') || normalized.includes('token_expired');
+  }
+
+  function displayUsageError(message = '') {
+    if (!message) return '';
+    return message.length > 90 ? `${message.slice(0, 87)}...` : message;
   }
 
   function sessionStatusLabel(status = '') {
@@ -619,6 +674,9 @@
               <h2>{item.account.nickname}</h2>
               <span class="status-pill {item.tone}"><i></i>{item.loginStatusLabel ? `${item.statusLabel} · ${item.loginStatusLabel}` : item.statusLabel}</span>
               <p>{item.account.profile_name || '未命名 profile'} · 上次切换： {formatLastSwitch(item.account)}</p>
+              {#if item.authStatusLabel}
+                <p class="auth-state" class:danger={item.authExpired}>{item.authStatusLabel}{item.authStatusDetail ? `，${item.authStatusDetail}` : ''}</p>
+              {/if}
             </div>
           </div>
 
@@ -650,7 +708,7 @@
             {#if item.refreshingUsage}
               <p class="usage-note">正在刷新用量…</p>
             {:else if item.usageError}
-              <p class="usage-error">{item.usageError}</p>
+              <p class="usage-error" title={item.usageError}>{displayUsageError(item.usageError)}</p>
             {:else if item.usageStale}
               <p class="usage-note">数据可能已过期</p>
             {/if}

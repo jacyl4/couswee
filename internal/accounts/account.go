@@ -20,6 +20,11 @@ type Account struct {
 	UsageLastRefresh string `json:"usage_last_refresh,omitempty"`
 	UsageStale       bool   `json:"usage_stale,omitempty"`
 	UsageError       string `json:"usage_error,omitempty"`
+	AuthStatus       string `json:"auth_status,omitempty"`
+	AuthExpired      bool   `json:"auth_expired,omitempty"`
+	AuthExpiresAt    string `json:"auth_expires_at,omitempty"`
+	AuthLastRefresh  string `json:"auth_last_refresh,omitempty"`
+	AuthError        string `json:"auth_error,omitempty"`
 	Active           bool   `json:"active"`
 	LastUsedAt       string `json:"last_used_at,omitempty"`
 	CreatedAt        string `json:"created_at,omitempty"`

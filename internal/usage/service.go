@@ -20,6 +20,7 @@ type Service struct {
 	sink      AccountSink
 	interval  time.Duration
 	timeout   time.Duration
+	unit      string
 	now       func() time.Time
 }
 
@@ -33,6 +34,7 @@ func NewService(cfg Config, collector Collector, accountSource AccountSource) *S
 		accounts:  accountSource,
 		interval:  ClampRefreshInterval(cfg.RefreshInterval),
 		timeout:   cfg.FallbackTimeout,
+		unit:      unitOrPercent(cfg.Unit),
 		now:       time.Now,
 	}
 }
@@ -121,6 +123,9 @@ func (s *Service) RefreshAccountWithReason(ctx context.Context, selector string,
 }
 
 func (s *Service) collectAccount(ctx context.Context, account accounts.Account) UsageRecord {
+	if shouldSkipUsageRefresh(account) {
+		return s.skippedUsageRecord(account)
+	}
 	if s.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, s.timeout)
@@ -134,7 +139,7 @@ func (s *Service) collectAccount(ctx context.Context, account accounts.Account) 
 			cached.LastRefresh = s.now()
 			return cached
 		}
-		fallback := AccountCollector{Unit: cfgUnitOrPercent(), Now: s.now}.Collect
+		fallback := AccountCollector{Unit: s.unit, Now: s.now}.Collect
 		record, _ := fallback(ctx, account)
 		record.Stale = true
 		record.Error = err.Error()
@@ -151,6 +156,37 @@ func (s *Service) collectAccount(ctx context.Context, account accounts.Account) 
 		record.Error = ""
 	}
 	return record
+}
+
+func shouldSkipUsageRefresh(account accounts.Account) bool {
+	if account.AuthExpired {
+		return true
+	}
+	switch account.AuthStatus {
+	case "expired", "missing", "invalid":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) skippedUsageRecord(account accounts.Account) UsageRecord {
+	lastRefresh := parseAuthTime(account.UsageLastRefresh)
+	return UsageRecord{
+		Account:         accountIdentity(account),
+		Usage5h:         float64(account.Usage5h),
+		UsageWeekly:     float64(account.UsageWeekly),
+		Remaining5h:     float64(account.Usage5h),
+		RemainingWeekly: float64(account.UsageWeekly),
+		ResetTime:       firstNonEmpty(account.ResetTime5h, account.ResetTimeWeekly),
+		ResetTime5h:     account.ResetTime5h,
+		ResetTimeWeekly: account.ResetTimeWeekly,
+		Unit:            unitOrPercent(s.unit),
+		UsageBasis:      "remaining",
+		Source:          SourceAccount,
+		LastRefresh:     lastRefresh,
+		Stale:           true,
+	}
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -259,7 +295,11 @@ func clampPercent(value float64) float64 {
 func BuildCollector(cfg Config) Collector {
 	var primary Collector
 	if cfg.APIEnabled && cfg.APIURL != "" {
-		primary = APICollector{URL: cfg.APIURL, Unit: cfg.Unit, ActiveAuthPath: cfg.ActiveAuthPath}
+		var refresher AuthRefresher
+		if cfg.AuthRefreshEnabled {
+			refresher = CodexCLIAuthRefresher{Timeout: cfg.AuthRefreshTimeout}
+		}
+		primary = APICollector{URL: cfg.APIURL, Unit: cfg.Unit, ActiveAuthPath: cfg.ActiveAuthPath, AuthRefresher: refresher}
 	}
 	fallbacks := []Collector{}
 	if cfg.FallbackCommand != "" {
@@ -275,7 +315,10 @@ func BuildCollector(cfg Config) Collector {
 	}
 }
 
-func cfgUnitOrPercent() string {
+func unitOrPercent(unit string) string {
+	if unit != "" {
+		return unit
+	}
 	return UnitPercent
 }
 

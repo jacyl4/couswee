@@ -50,7 +50,7 @@ func (c AccountCollector) Collect(_ context.Context, account accounts.Account) (
 		ResetTimeWeekly: account.ResetTimeWeekly,
 		Unit:            unit,
 		UsageBasis:      "remaining",
-		Source:          firstNonEmpty(account.UsageSource, SourceAccount),
+		Source:          SourceAccount,
 		LastRefresh:     now,
 		Stale:           true,
 		Error:           account.UsageError,
@@ -63,6 +63,7 @@ type APICollector struct {
 	Client         *http.Client
 	Now            func() time.Time
 	ActiveAuthPath string
+	AuthRefresher  AuthRefresher
 }
 
 func (c APICollector) Collect(ctx context.Context, account accounts.Account) (UsageRecord, error) {
@@ -70,46 +71,41 @@ func (c APICollector) Collect(ctx context.Context, account accounts.Account) (Us
 		return UsageRecord{}, ErrNoCollector
 	}
 	authPath := collectorAuthPath(account, c.ActiveAuthPath)
-	auth, err := ReadCodexAuth(authPath)
+	auth, err := c.readFreshAuth(ctx, authPath)
 	if err != nil {
 		return UsageRecord{}, err
 	}
-	endpoint, err := url.Parse(c.URL)
+	endpoint, err := c.usageEndpoint(account, authPath, auth)
 	if err != nil {
-		return UsageRecord{}, fmt.Errorf("parse usage api url: %w", err)
+		return UsageRecord{}, err
 	}
-	q := endpoint.Query()
-	q.Set("account", accountIdentity(account))
-	q.Set("auth_path", authPath)
-	if auth.AccountID != "" {
-		q.Set("account_id", auth.AccountID)
-	}
-	endpoint.RawQuery = q.Encode()
-
 	client := c.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	statusCode, body, err := c.requestUsageAPI(ctx, client, endpoint, auth)
 	if err != nil {
 		return UsageRecord{}, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
-	if auth.AccountID != "" {
-		req.Header.Set("ChatGPT-Account-Id", auth.AccountID)
+	if statusCode == http.StatusUnauthorized && c.AuthRefresher != nil {
+		if err := c.AuthRefresher.RefreshCodexAuth(ctx, authPath); err != nil {
+			return UsageRecord{}, fmt.Errorf("refresh codex auth after usage api 401: %w", err)
+		}
+		auth, err = ReadCodexAuth(authPath)
+		if err != nil {
+			return UsageRecord{}, fmt.Errorf("read refreshed codex auth file: %w", err)
+		}
+		endpoint, err = c.usageEndpoint(account, authPath, auth)
+		if err != nil {
+			return UsageRecord{}, err
+		}
+		statusCode, body, err = c.requestUsageAPI(ctx, client, endpoint, auth)
+		if err != nil {
+			return UsageRecord{}, err
+		}
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return UsageRecord{}, fmt.Errorf("request usage api: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return UsageRecord{}, fmt.Errorf("usage api status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return UsageRecord{}, fmt.Errorf("read usage api response: %w", err)
+	if statusCode < 200 || statusCode >= 300 {
+		return UsageRecord{}, usageAPIStatusError(statusCode, body)
 	}
 	record, err := ParseUsageRecord(body)
 	if err != nil {
@@ -121,9 +117,92 @@ func (c APICollector) Collect(ctx context.Context, account accounts.Account) (Us
 	return normalizeRecord(record, account, SourceAPI, c.Unit, c.Now), nil
 }
 
+func (c APICollector) readFreshAuth(ctx context.Context, authPath string) (CodexAuth, error) {
+	auth, err := ReadCodexAuth(authPath)
+	if err != nil {
+		return CodexAuth{}, err
+	}
+	if c.AuthRefresher == nil {
+		return auth, nil
+	}
+	now := time.Now()
+	if c.Now != nil {
+		now = c.Now()
+	}
+	if !codexAuthNeedsRefresh(auth, now) {
+		return auth, nil
+	}
+	if err := c.AuthRefresher.RefreshCodexAuth(ctx, authPath); err != nil {
+		return CodexAuth{}, fmt.Errorf("refresh expired codex auth: %w", err)
+	}
+	auth, err = ReadCodexAuth(authPath)
+	if err != nil {
+		return CodexAuth{}, fmt.Errorf("read refreshed codex auth file: %w", err)
+	}
+	return auth, nil
+}
+
+func (c APICollector) usageEndpoint(account accounts.Account, authPath string, auth CodexAuth) (string, error) {
+	endpoint, err := url.Parse(c.URL)
+	if err != nil {
+		return "", fmt.Errorf("parse usage api url: %w", err)
+	}
+	q := endpoint.Query()
+	q.Set("account", accountIdentity(account))
+	q.Set("auth_path", authPath)
+	if auth.AccountID != "" {
+		q.Set("account_id", auth.AccountID)
+	}
+	endpoint.RawQuery = q.Encode()
+	return endpoint.String(), nil
+}
+
+func (c APICollector) requestUsageAPI(ctx context.Context, client *http.Client, endpoint string, auth CodexAuth) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
+	if auth.AccountID != "" {
+		req.Header.Set("ChatGPT-Account-Id", auth.AccountID)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("request usage api: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("read usage api response: %w", err)
+	}
+	return resp.StatusCode, body, nil
+}
+
+func usageAPIStatusError(statusCode int, body []byte) error {
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil {
+		if code := strings.TrimSpace(payload.Error.Code); code != "" {
+			return fmt.Errorf("usage api status %d: %s", statusCode, code)
+		}
+		if message := strings.TrimSpace(payload.Error.Message); message != "" {
+			return fmt.Errorf("usage api status %d: %s", statusCode, message)
+		}
+	}
+	return fmt.Errorf("usage api status %d", statusCode)
+}
+
 type CodexAuth struct {
-	AccessToken string
-	AccountID   string
+	AccessToken          string
+	RefreshToken         string
+	AccountID            string
+	LastRefresh          time.Time
+	AccessTokenExpiresAt time.Time
 }
 
 func ReadCodexAuth(path string) (CodexAuth, error) {
@@ -136,15 +215,23 @@ func ReadCodexAuth(path string) (CodexAuth, error) {
 		return CodexAuth{}, fmt.Errorf("read codex auth file: %w", err)
 	}
 	var raw struct {
-		Tokens struct {
-			AccessToken string `json:"access_token"`
-			AccountID   string `json:"account_id"`
+		LastRefresh string `json:"last_refresh"`
+		Tokens      struct {
+			AccessToken  string `json:"access_token"`
+			RefreshToken string `json:"refresh_token"`
+			AccountID    string `json:"account_id"`
 		} `json:"tokens"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return CodexAuth{}, fmt.Errorf("parse codex auth file: %w", err)
 	}
-	auth := CodexAuth{AccessToken: strings.TrimSpace(raw.Tokens.AccessToken), AccountID: strings.TrimSpace(raw.Tokens.AccountID)}
+	auth := CodexAuth{
+		AccessToken:          strings.TrimSpace(raw.Tokens.AccessToken),
+		RefreshToken:         strings.TrimSpace(raw.Tokens.RefreshToken),
+		AccountID:            strings.TrimSpace(raw.Tokens.AccountID),
+		LastRefresh:          parseAuthTime(raw.LastRefresh),
+		AccessTokenExpiresAt: jwtExpiresAt(strings.TrimSpace(raw.Tokens.AccessToken)),
+	}
 	if auth.AccessToken == "" {
 		return CodexAuth{}, fmt.Errorf("codex auth file has no tokens.access_token")
 	}
@@ -723,6 +810,9 @@ func (o Orchestrator) Collect(ctx context.Context, account accounts.Account) (Us
 		}
 		record, err := collector.Collect(ctx, account)
 		if err == nil {
+			if record.Source == SourceAccount && record.Error == "" && len(errs) > 0 {
+				record.Error = errors.Join(errs...).Error()
+			}
 			return record, nil
 		}
 		if !errors.Is(err, ErrNoCollector) {

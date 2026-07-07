@@ -205,12 +205,13 @@ curl "$BASE_URL/api/codex/usage"
 
 ### 采集顺序
 
-1. API 采集器：读取账号认证文件中的 `tokens.access_token`，请求 `COUSWEE_USAGE_API_URL`。
-2. 备用命令：如果设置了 `COUSWEE_USAGE_FALLBACK_CMD`，失败时执行本地命令。
-3. 会话日志兜底：如果设置了 `COUSWEE_USAGE_SESSION_GLOB`，解析 Codex CLI 会话日志中的 `payload.rate_limits`。
-4. 账号记录兜底：以上都失败时，使用 SQLite 中保存的上次成功百分比，并标记为过期数据。
+1. 认证状态预检：`expired`、`missing`、`invalid` 账号不会参与额度刷新，也不会触发 Codex CLI 或远程限额请求；界面只展示认证状态，并沿用 SQLite 中保存的上次成功百分比。
+2. API 采集器：读取可用账号认证文件中的 `tokens.access_token`，必要时先通过 Codex CLI 刷新该 profile 的 `auth.json`，再请求 `COUSWEE_USAGE_API_URL`；如果接口返回 401，会刷新并重试一次。
+3. 备用命令：如果设置了 `COUSWEE_USAGE_FALLBACK_CMD`，失败时执行本地命令。
+4. 会话日志兜底：如果设置了 `COUSWEE_USAGE_SESSION_GLOB`，解析 Codex CLI 会话日志中的 `payload.rate_limits`。
+5. 账号记录兜底：以上都失败时，使用 SQLite 中保存的上次成功百分比，并标记为过期数据。
 
-对于 Codex 限额载荷，couswee 会把 `used_percent` / `used_percentage` 转换为 `100 - used`，保持和 Codex CLI “剩余”一致的语义。
+对于 Codex 限额载荷，couswee 会把 `rate_limit.primary_window.used_percent` / `rate_limit.secondary_window.used_percent` 或旧格式 `used_percentage` 转换为 `100 - used`，保持和 Codex CLI “剩余”一致的语义。Codex CLI 自动刷新 active `~/.codex/auth.json` 后，couswee 会按 `tokens.account_id` 将新认证文件回写到对应受管 profile，避免后续账号切换恢复旧 token。
 
 ### 用量环境变量
 
@@ -220,6 +221,8 @@ curl "$BASE_URL/api/codex/usage"
 | `COUSWEE_USAGE_UNIT` | `percent` | 用量单位标签，前端按百分比展示 |
 | `COUSWEE_USAGE_API_ENABLED` | `true` | 是否启用 API 采集器 |
 | `COUSWEE_USAGE_API_URL` | `https://chatgpt.com/backend-api/wham/usage` | 用量 / 限额接口 |
+| `COUSWEE_USAGE_AUTH_REFRESH_ENABLED` | `true` | API 采集前是否允许通过 Codex CLI 刷新过期认证 |
+| `COUSWEE_USAGE_AUTH_REFRESH_TIMEOUT` | `30s` | Codex 认证刷新超时时间 |
 | `COUSWEE_USAGE_SESSION_GLOB` | 空 | 可选 Codex 会话日志兜底，例如 `~/.codex/sessions/**/*.jsonl` |
 | `COUSWEE_USAGE_FALLBACK_CMD` | 空 | 可选本地备用命令，后端会追加账号昵称和认证文件路径参数 |
 | `COUSWEE_USAGE_FALLBACK_TIMEOUT` | `20s` | 备用命令超时时间 |

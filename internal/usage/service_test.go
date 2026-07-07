@@ -174,6 +174,65 @@ func TestServiceDoesNotPersistErrorUsageToAccountSink(t *testing.T) {
 	}
 }
 
+func TestServiceSkipsAuthProblemAccounts(t *testing.T) {
+	var collected []string
+	var persisted []accounts.Account
+	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
+		collected = append(collected, account.ProfileName)
+		return UsageRecord{
+			Account:         account.ProfileName,
+			Remaining5h:     75,
+			RemainingWeekly: 80,
+			Unit:            UnitPercent,
+			Source:          SourceAPI,
+		}, nil
+	}), func() []accounts.Account {
+		return []accounts.Account{
+			{
+				Nickname:         "Expired",
+				ProfileName:      "expired",
+				Usage5h:          33,
+				UsageWeekly:      44,
+				UsageSource:      SourceAPI,
+				UsageLastRefresh: "2026-07-01T00:00:00Z",
+				UsageError:       "refresh expired codex auth: old failure",
+				AuthStatus:       "expired",
+				AuthExpired:      true,
+			},
+			{Nickname: "Ready", ProfileName: "ready", AuthStatus: "ready"},
+		}
+	})
+	svc.SetAccountSink(func(updated []accounts.Account) error {
+		persisted = append([]accounts.Account(nil), updated...)
+		return nil
+	})
+
+	svc.Refresh(context.Background())
+
+	if len(collected) != 1 || collected[0] != "ready" {
+		t.Fatalf("collected = %#v, want only ready", collected)
+	}
+	records := svc.Records()
+	if len(records) != 2 {
+		t.Fatalf("records = %#v", records)
+	}
+	byAccount := map[string]UsageRecord{}
+	for _, record := range records {
+		byAccount[record.Account] = record
+	}
+	expired := byAccount["expired"]
+	if expired.Source != SourceAccount || !expired.Stale || expired.Error != "" || expired.Remaining5h != 33 || expired.LastRefresh.IsZero() {
+		t.Fatalf("expired record = %#v", expired)
+	}
+	ready := byAccount["ready"]
+	if ready.Source != SourceAPI || ready.Stale || ready.Remaining5h != 75 {
+		t.Fatalf("ready record = %#v", ready)
+	}
+	if len(persisted) != 2 || persisted[0].UsageError != "" || !persisted[0].UsageStale || persisted[0].UsageSource != SourceAccount {
+		t.Fatalf("persisted = %#v", persisted)
+	}
+}
+
 func TestServiceDoesNotPersistAccountFallbackToAccountSink(t *testing.T) {
 	var persisted []accounts.Account
 	svc := NewService(DefaultConfig(), AccountCollector{Unit: UnitPercent}, func() []accounts.Account {
@@ -187,6 +246,27 @@ func TestServiceDoesNotPersistAccountFallbackToAccountSink(t *testing.T) {
 	svc.Refresh(context.Background())
 
 	if len(persisted) != 1 || persisted[0].Usage5h != 33 || persisted[0].UsageWeekly != 44 || !persisted[0].UsageStale || persisted[0].UsageSource != SourceAccount {
+		t.Fatalf("persisted = %#v", persisted)
+	}
+}
+
+func TestAccountFallbackDoesNotInheritPreviousLiveSource(t *testing.T) {
+	var persisted []accounts.Account
+	svc := NewService(DefaultConfig(), AccountCollector{Unit: UnitPercent}, func() []accounts.Account {
+		return []accounts.Account{{Nickname: "Dev1", Usage5h: 33, UsageWeekly: 44, UsageSource: SourceAPI}}
+	})
+	svc.SetAccountSink(func(updated []accounts.Account) error {
+		persisted = append([]accounts.Account(nil), updated...)
+		return nil
+	})
+
+	svc.Refresh(context.Background())
+
+	records := svc.Records()
+	if len(records) != 1 || records[0].Source != SourceAccount || !records[0].Stale {
+		t.Fatalf("records = %#v", records)
+	}
+	if len(persisted) != 1 || persisted[0].UsageSource != SourceAccount || !persisted[0].UsageStale {
 		t.Fatalf("persisted = %#v", persisted)
 	}
 }
