@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -549,7 +550,19 @@ func (s *Service) ReplaceUsage(accounts []Account) error {
 				current[i].UsageSource != next.UsageSource ||
 				current[i].UsageLastRefresh != next.UsageLastRefresh ||
 				current[i].UsageStale != next.UsageStale ||
-				current[i].UsageError != next.UsageError {
+				current[i].UsageError != next.UsageError ||
+				current[i].HasWeeklyWindow != next.HasWeeklyWindow ||
+				current[i].Availability != next.Availability ||
+				current[i].PlanType != next.PlanType ||
+				!reflect.DeepEqual(current[i].RateLimitAllowed, next.RateLimitAllowed) ||
+				current[i].RateLimitReachedType != next.RateLimitReachedType ||
+				!reflect.DeepEqual(current[i].CreditsAvailable, next.CreditsAvailable) ||
+				!reflect.DeepEqual(current[i].CreditsUnlimited, next.CreditsUnlimited) ||
+				!reflect.DeepEqual(current[i].CreditsBalance, next.CreditsBalance) ||
+				!reflect.DeepEqual(current[i].CreditsApproxLocalMessages, next.CreditsApproxLocalMessages) ||
+				!reflect.DeepEqual(current[i].CreditsApproxCloudMessages, next.CreditsApproxCloudMessages) ||
+				!reflect.DeepEqual(current[i].CreditsOverageLimitReached, next.CreditsOverageLimitReached) ||
+				!reflect.DeepEqual(current[i].SpendControlReached, next.SpendControlReached) {
 				current[i].Usage5h = next.Usage5h
 				current[i].UsageWeekly = next.UsageWeekly
 				current[i].ResetTime5h = next.ResetTime5h
@@ -558,6 +571,18 @@ func (s *Service) ReplaceUsage(accounts []Account) error {
 				current[i].UsageLastRefresh = next.UsageLastRefresh
 				current[i].UsageStale = next.UsageStale
 				current[i].UsageError = next.UsageError
+				current[i].HasWeeklyWindow = next.HasWeeklyWindow
+				current[i].Availability = next.Availability
+				current[i].PlanType = next.PlanType
+				current[i].RateLimitAllowed = next.RateLimitAllowed
+				current[i].RateLimitReachedType = next.RateLimitReachedType
+				current[i].CreditsAvailable = next.CreditsAvailable
+				current[i].CreditsUnlimited = next.CreditsUnlimited
+				current[i].CreditsBalance = next.CreditsBalance
+				current[i].CreditsApproxLocalMessages = next.CreditsApproxLocalMessages
+				current[i].CreditsApproxCloudMessages = next.CreditsApproxCloudMessages
+				current[i].CreditsOverageLimitReached = next.CreditsOverageLimitReached
+				current[i].SpendControlReached = next.SpendControlReached
 				current[i].UpdatedAt = nowRFC3339()
 				changed = true
 			}

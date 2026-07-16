@@ -124,6 +124,34 @@ func TestSQLiteStorePersistsUsageMetadata(t *testing.T) {
 	}
 }
 
+func TestSQLiteStorePersistsCreditAwareUsageMetadata(t *testing.T) {
+	allowed := true
+	creditsAvailable := true
+	balance := "12.50"
+	localMessages := 24
+	_, store, _ := newSQLiteTestService(t, []Account{{
+		Nickname:                   "Dev1",
+		AuthPath:                   "~/auth.json",
+		HasWeeklyWindow:            true,
+		Availability:               "credit_available",
+		PlanType:                   "plus",
+		RateLimitAllowed:           &allowed,
+		RateLimitReachedType:       "weekly",
+		CreditsAvailable:           &creditsAvailable,
+		CreditsBalance:             &balance,
+		CreditsApproxLocalMessages: &localMessages,
+		CreditsOverageLimitReached: &allowed,
+		SpendControlReached:        &allowed,
+	}})
+	got := store.Accounts()[0]
+	if !got.HasWeeklyWindow || got.Availability != "credit_available" || got.PlanType != "plus" ||
+		got.RateLimitAllowed == nil || !*got.RateLimitAllowed || got.CreditsAvailable == nil || !*got.CreditsAvailable ||
+		got.CreditsBalance == nil || *got.CreditsBalance != balance || got.CreditsApproxLocalMessages == nil || *got.CreditsApproxLocalMessages != localMessages ||
+		got.CreditsOverageLimitReached == nil || !*got.CreditsOverageLimitReached || got.SpendControlReached == nil || !*got.SpendControlReached {
+		t.Fatalf("credit-aware usage metadata not persisted: %#v", got)
+	}
+}
+
 func TestSQLiteStoreMigratesDisplayNameColumn(t *testing.T) {
 	home := t.TempDir()
 	dbPath := DBPath(home)

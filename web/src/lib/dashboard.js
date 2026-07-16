@@ -1,4 +1,5 @@
 /** @typedef {'ok' | 'warn' | 'danger'} Tone */
+/** @typedef {'available' | 'credit_available' | 'limited' | 'blocked' | 'unknown'} Availability */
 
 /**
  * UI lifecycle key for one concrete account record.
@@ -27,38 +28,46 @@ export function clampPercent(value) {
 }
 
 /**
- * @param {number} remaining5h
+ * @param {Availability | string | undefined} availability
  * @param {number} remainingWeekly
+ * @param {boolean} hasWeeklyWindow
  * @returns {Tone}
  */
-export function toneFor(remaining5h, remainingWeekly) {
-  const lowestRemaining = Math.min(clampPercent(remaining5h), clampPercent(remainingWeekly));
-  if (lowestRemaining === 0) return 'danger';
-  if (lowestRemaining <= 20) return 'warn';
+export function toneFor(availability, remainingWeekly, hasWeeklyWindow = false) {
+  if (availability === 'blocked' || availability === 'limited') return 'danger';
+  if (availability === 'credit_available' || availability === 'unknown') return 'warn';
+  if (!hasWeeklyWindow) return 'warn';
+  const remaining = clampPercent(remainingWeekly);
+  if (remaining === 0) return 'danger';
+  if (remaining <= 20) return 'warn';
   return 'ok';
 }
 
 /**
+ * @param {Availability | string | undefined} availability
  * @param {Tone} tone
  */
-export function labelFor(tone) {
-  if (tone === 'danger') return '冷却中';
+export function labelFor(availability, tone) {
+  if (availability === 'blocked') return '已阻止';
+  if (availability === 'limited') return '额度受限';
+  if (availability === 'credit_available') return '余额可用';
+  if (availability === 'unknown') return '待同步';
   if (tone === 'warn') return '接近用尽';
   return '可用';
 }
 
 /**
- * @param {Array<{ tone: Tone }>} dashboardAccounts
+ * @param {Array<{ availability?: Availability | string }>} dashboardAccounts
  */
 export function availableCount(dashboardAccounts) {
-  return dashboardAccounts.filter((item) => item.tone === 'ok').length;
+  return dashboardAccounts.filter((item) => item.availability === 'available' || item.availability === 'credit_available').length;
 }
 
 /**
- * @param {Array<{ tone: Tone }>} dashboardAccounts
+ * @param {Array<{ availability?: Availability | string }>} dashboardAccounts
  */
 export function suggestedSwitchCount(dashboardAccounts) {
-  return dashboardAccounts.filter((item) => item.tone !== 'ok').length;
+  return dashboardAccounts.filter((item) => item.availability === 'limited' || item.availability === 'blocked' || item.availability === 'unknown').length;
 }
 
 /**

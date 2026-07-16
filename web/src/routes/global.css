@@ -454,6 +454,12 @@ button {
   font-size: 0.9rem;
 }
 
+.identity-copy .entitlement-state {
+  margin-top: 4px;
+  color: #b9c8ac;
+  font-size: 0.82rem;
+}
+
 .identity-copy .auth-state {
   margin-top: 5px;
   color: var(--green);
@@ -478,8 +484,7 @@ button {
   min-width: 0;
 }
 
-.limit-heading,
-.limit-detail {
+.limit-heading {
   display: grid;
   gap: 10px;
   align-items: center;
@@ -488,10 +493,6 @@ button {
 
 .limit-heading {
   grid-template-columns: max-content minmax(0, 1fr);
-}
-
-.limit-detail {
-  grid-template-columns: minmax(0, 520px) minmax(0, 1fr);
 }
 
 .limit-label {
@@ -546,17 +547,9 @@ button {
   color: var(--red);
 }
 
-.reset-text {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.9rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .usage-error,
 .usage-note {
-  margin: -10px 0 0 150px;
+  margin: 0;
   color: var(--red);
   font-size: 0.82rem;
 }
@@ -693,8 +686,7 @@ button {
     font-size: 1.18rem;
   }
 
-  .limit-heading,
-  .limit-detail {
+  .limit-heading {
     grid-template-columns: 1fr;
     gap: 6px;
   }

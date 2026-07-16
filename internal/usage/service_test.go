@@ -135,8 +135,9 @@ func TestServicePersistsSuccessfulUsageToAccountSink(t *testing.T) {
 			Account:         account.Nickname,
 			Remaining5h:     42.4,
 			RemainingWeekly: 87.6,
-			ResetTime5h:     "2026-05-20T23:00:00+08:00",
-			ResetTimeWeekly: "2026-05-24T23:00:00+08:00",
+			HasWeeklyWindow: true,
+			Availability:    "available",
+			PlanType:        "plus",
 			Unit:            UnitPercent,
 			Source:          SourceAPI,
 		}, nil
@@ -150,7 +151,7 @@ func TestServicePersistsSuccessfulUsageToAccountSink(t *testing.T) {
 
 	svc.Refresh(context.Background())
 
-	if len(persisted) != 1 || persisted[0].Usage5h != 42 || persisted[0].UsageWeekly != 88 || persisted[0].ResetTime5h == "" || persisted[0].ResetTimeWeekly == "" {
+	if len(persisted) != 1 || persisted[0].Usage5h != 0 || persisted[0].UsageWeekly != 88 || !persisted[0].HasWeeklyWindow || persisted[0].Availability != "available" || persisted[0].PlanType != "plus" {
 		t.Fatalf("persisted = %#v", persisted)
 	}
 }
@@ -295,7 +296,7 @@ func TestServiceRefreshAccountOnlyCollectsMatchingAccount(t *testing.T) {
 	if len(records) != 1 || records[0].Account != "dev-backup" {
 		t.Fatalf("records = %#v", records)
 	}
-	if len(persisted) != 2 || persisted[0].Usage5h != 0 || persisted[1].Usage5h != 31 || persisted[1].UsageWeekly != 32 {
+	if len(persisted) != 2 || persisted[0].Usage5h != 0 || persisted[1].Usage5h != 0 || persisted[1].UsageWeekly != 32 {
 		t.Fatalf("persisted = %#v", persisted)
 	}
 }
@@ -363,12 +364,13 @@ func TestServicePersistsUsedBasisAsRemainingPercent(t *testing.T) {
 	var persisted []accounts.Account
 	svc := NewService(DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (UsageRecord, error) {
 		return UsageRecord{
-			Account:     account.Nickname,
-			Usage5h:     100,
-			UsageWeekly: 25,
-			UsageBasis:  "used",
-			Unit:        UnitPercent,
-			Source:      SourceAPI,
+			Account:         account.Nickname,
+			Usage5h:         100,
+			UsageWeekly:     25,
+			HasWeeklyWindow: true,
+			UsageBasis:      "used",
+			Unit:            UnitPercent,
+			Source:          SourceAPI,
 		}, nil
 	}), func() []accounts.Account {
 		return []accounts.Account{{Nickname: "Dev1", Usage5h: 99, UsageWeekly: 99}}
@@ -380,7 +382,7 @@ func TestServicePersistsUsedBasisAsRemainingPercent(t *testing.T) {
 
 	svc.Refresh(context.Background())
 
-	if len(persisted) != 1 || persisted[0].Usage5h != 0 || persisted[0].UsageWeekly != 75 {
+	if len(persisted) != 1 || persisted[0].Usage5h != 99 || persisted[0].UsageWeekly != 75 || !persisted[0].HasWeeklyWindow {
 		t.Fatalf("persisted = %#v", persisted)
 	}
 }

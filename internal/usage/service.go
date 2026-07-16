@@ -173,19 +173,31 @@ func shouldSkipUsageRefresh(account accounts.Account) bool {
 func (s *Service) skippedUsageRecord(account accounts.Account) UsageRecord {
 	lastRefresh := parseAuthTime(account.UsageLastRefresh)
 	return UsageRecord{
-		Account:         accountIdentity(account),
-		Usage5h:         float64(account.Usage5h),
-		UsageWeekly:     float64(account.UsageWeekly),
-		Remaining5h:     float64(account.Usage5h),
-		RemainingWeekly: float64(account.UsageWeekly),
-		ResetTime:       firstNonEmpty(account.ResetTime5h, account.ResetTimeWeekly),
-		ResetTime5h:     account.ResetTime5h,
-		ResetTimeWeekly: account.ResetTimeWeekly,
-		Unit:            unitOrPercent(s.unit),
-		UsageBasis:      "remaining",
-		Source:          SourceAccount,
-		LastRefresh:     lastRefresh,
-		Stale:           true,
+		Account:                    accountIdentity(account),
+		Usage5h:                    float64(account.Usage5h),
+		UsageWeekly:                float64(account.UsageWeekly),
+		Remaining5h:                float64(account.Usage5h),
+		RemainingWeekly:            float64(account.UsageWeekly),
+		ResetTime:                  firstNonEmpty(account.ResetTime5h, account.ResetTimeWeekly),
+		ResetTime5h:                account.ResetTime5h,
+		ResetTimeWeekly:            account.ResetTimeWeekly,
+		HasWeeklyWindow:            account.HasWeeklyWindow,
+		Availability:               account.Availability,
+		PlanType:                   account.PlanType,
+		RateLimitAllowed:           account.RateLimitAllowed,
+		RateLimitReachedType:       account.RateLimitReachedType,
+		CreditsAvailable:           account.CreditsAvailable,
+		CreditsUnlimited:           account.CreditsUnlimited,
+		CreditsBalance:             account.CreditsBalance,
+		CreditsApproxLocalMessages: account.CreditsApproxLocalMessages,
+		CreditsApproxCloudMessages: account.CreditsApproxCloudMessages,
+		CreditsOverageLimitReached: account.CreditsOverageLimitReached,
+		SpendControlReached:        account.SpendControlReached,
+		Unit:                       unitOrPercent(s.unit),
+		UsageBasis:                 "remaining",
+		Source:                     SourceAccount,
+		LastRefresh:                lastRefresh,
+		Stale:                      true,
 	}
 }
 
@@ -232,17 +244,10 @@ func (s *Service) persistUsage(accountsList []accounts.Account, records []UsageR
 		liveSuccess := !record.Stale && record.Error == "" && record.Source != "error" && record.Source != SourceAccount
 		usage5h := next[i].Usage5h
 		usageWeekly := next[i].UsageWeekly
-		resetTime5h := record.ResetTime5h
-		if resetTime5h == "" {
-			resetTime5h = record.ResetTime
-		}
-		resetTimeWeekly := record.ResetTimeWeekly
+		resetTime5h := next[i].ResetTime5h
+		resetTimeWeekly := next[i].ResetTimeWeekly
 		if liveSuccess {
-			usage5h = int(math.Round(clampPercent(remainingPercent(record, record.Remaining5h, record.Usage5h))))
 			usageWeekly = int(math.Round(clampPercent(remainingPercent(record, record.RemainingWeekly, record.UsageWeekly))))
-		} else {
-			resetTime5h = next[i].ResetTime5h
-			resetTimeWeekly = next[i].ResetTimeWeekly
 		}
 		lastRefresh := ""
 		if !record.LastRefresh.IsZero() {
@@ -266,10 +271,52 @@ func (s *Service) persistUsage(accountsList []accounts.Account, records []UsageR
 			next[i].UsageError = record.Error
 			changed = true
 		}
+		if liveSuccess && !sameEntitlement(next[i], record) {
+			next[i].HasWeeklyWindow = record.HasWeeklyWindow
+			next[i].Availability = record.Availability
+			next[i].PlanType = record.PlanType
+			next[i].RateLimitAllowed = record.RateLimitAllowed
+			next[i].RateLimitReachedType = record.RateLimitReachedType
+			next[i].CreditsAvailable = record.CreditsAvailable
+			next[i].CreditsUnlimited = record.CreditsUnlimited
+			next[i].CreditsBalance = record.CreditsBalance
+			next[i].CreditsApproxLocalMessages = record.CreditsApproxLocalMessages
+			next[i].CreditsApproxCloudMessages = record.CreditsApproxCloudMessages
+			next[i].CreditsOverageLimitReached = record.CreditsOverageLimitReached
+			next[i].SpendControlReached = record.SpendControlReached
+			changed = true
+		}
 	}
 	if changed {
 		_ = s.sink(next)
 	}
+}
+
+func sameEntitlement(account accounts.Account, record UsageRecord) bool {
+	return account.HasWeeklyWindow == record.HasWeeklyWindow &&
+		account.Availability == record.Availability &&
+		account.PlanType == record.PlanType &&
+		optionalBoolEqual(account.RateLimitAllowed, record.RateLimitAllowed) &&
+		account.RateLimitReachedType == record.RateLimitReachedType &&
+		optionalBoolEqual(account.CreditsAvailable, record.CreditsAvailable) &&
+		optionalBoolEqual(account.CreditsUnlimited, record.CreditsUnlimited) &&
+		optionalStringEqual(account.CreditsBalance, record.CreditsBalance) &&
+		optionalIntEqual(account.CreditsApproxLocalMessages, record.CreditsApproxLocalMessages) &&
+		optionalIntEqual(account.CreditsApproxCloudMessages, record.CreditsApproxCloudMessages) &&
+		optionalBoolEqual(account.CreditsOverageLimitReached, record.CreditsOverageLimitReached) &&
+		optionalBoolEqual(account.SpendControlReached, record.SpendControlReached)
+}
+
+func optionalBoolEqual(left, right *bool) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func optionalStringEqual(left, right *string) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func optionalIntEqual(left, right *int) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func remainingPercent(record UsageRecord, remaining, usage float64) float64 {

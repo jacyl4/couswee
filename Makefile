@@ -1,7 +1,7 @@
 .PHONY: frontend build package test clean version
 
 APP := couswee
-VERSION := v0.1.5
+VERSION := v0.1.6
 PKG := couswee/internal/version
 GO ?= go
 NPM ?= npm

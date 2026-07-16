@@ -10,19 +10,19 @@ import {
   toneFor
 } from './dashboard.js';
 
-test('toneFor treats zero weekly remaining as cooldown danger', () => {
-  assert.equal(toneFor(100, 0), 'danger');
-  assert.equal(toneFor(0, 100), 'danger');
-  assert.equal(toneFor(45, 50), 'ok');
-  assert.equal(toneFor(21, 90), 'ok');
-  assert.equal(toneFor(20, 90), 'warn');
-  assert.equal(toneFor(1, 90), 'warn');
-  assert.equal(toneFor(9, 90), 'warn');
+test('toneFor prioritizes backend availability and only falls back to the weekly window', () => {
+  assert.equal(toneFor('blocked', 90, true), 'danger');
+  assert.equal(toneFor('limited', 90, true), 'danger');
+  assert.equal(toneFor('credit_available', 0, true), 'warn');
+  assert.equal(toneFor('unknown', 90, false), 'warn');
+  assert.equal(toneFor('available', 0, true), 'danger');
+  assert.equal(toneFor('available', 20, true), 'warn');
+  assert.equal(toneFor('available', 21, true), 'ok');
 });
 
-test('summary counts derive from dashboard tone', () => {
-  const accounts = [{ tone: 'ok' }, { tone: 'warn' }, { tone: 'danger' }];
-  assert.equal(availableCount(accounts), 1);
+test('summary counts derive from backend availability', () => {
+  const accounts = [{ availability: 'available' }, { availability: 'credit_available' }, { availability: 'limited' }, { availability: 'unknown' }];
+  assert.equal(availableCount(accounts), 2);
   assert.equal(suggestedSwitchCount(accounts), 2);
 });
 

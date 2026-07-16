@@ -173,7 +173,7 @@ func TestAPICollectorRefreshesAndRetriesOn401(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refresher.calls != 1 || requests != 2 || record.Remaining5h != 78 || record.RemainingWeekly != 58 {
+	if refresher.calls != 1 || requests != 2 || record.Remaining5h != 0 || record.RemainingWeekly != 78 || !record.HasWeeklyWindow {
 		t.Fatalf("calls=%d requests=%d record=%#v", refresher.calls, requests, record)
 	}
 }
@@ -185,6 +185,16 @@ func TestParseUsageRecord(t *testing.T) {
 	}
 	if record.Account != "Dev1" || record.UsageWeekly != 2 {
 		t.Fatalf("unexpected record %#v", record)
+	}
+}
+
+func TestParseUsageRecordRecognizesCreditAwareFallbackPayload(t *testing.T) {
+	record, err := ParseUsageRecord([]byte(`{"weekly_remaining":42,"has_weekly_window":true,"availability":"credit_available","plan_type":"plus","credits_available":true,"credits_balance":"12.50"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.RemainingWeekly != 42 || !record.HasWeeklyWindow || record.Availability != "credit_available" || record.CreditsAvailable == nil || !*record.CreditsAvailable || record.CreditsBalance == nil || *record.CreditsBalance != "12.50" {
+		t.Fatalf("record = %#v", record)
 	}
 }
 
@@ -264,11 +274,11 @@ func TestParseRateLimitRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Usage5h != 81 || record.UsageWeekly != 13 || record.Unit != UnitPercent || record.UsageBasis != "remaining" {
+	if record.Usage5h != 0 || record.UsageWeekly != 13 || !record.HasWeeklyWindow || record.Unit != UnitPercent || record.UsageBasis != "remaining" {
 		t.Fatalf("unexpected record %#v", record)
 	}
-	if record.ResetTime == "" || record.ResetTime5h == "" || record.ResetTimeWeekly == "" || record.LastRefresh.IsZero() {
-		t.Fatalf("missing reset/refresh %#v", record)
+	if record.LastRefresh.IsZero() || record.Availability != "available" {
+		t.Fatalf("missing current usage metadata %#v", record)
 	}
 }
 
@@ -293,10 +303,10 @@ func TestParseWhamUsageRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Usage5h != 88 || record.UsageWeekly != 98 || record.Remaining5h != 88 || record.RemainingWeekly != 98 {
+	if record.Usage5h != 0 || record.UsageWeekly != 88 || record.Remaining5h != 0 || record.RemainingWeekly != 88 || !record.HasWeeklyWindow {
 		t.Fatalf("unexpected remaining values %#v", record)
 	}
-	if record.ResetTime5h == "" || record.ResetTimeWeekly == "" || record.UsageBasis != "remaining" || record.Unit != UnitPercent {
+	if record.UsageBasis != "remaining" || record.Unit != UnitPercent || record.Availability != "available" {
 		t.Fatalf("unexpected metadata %#v", record)
 	}
 }
@@ -311,7 +321,7 @@ func TestParseWhamUsageRecordAllowsZeroUsedPercent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Usage5h != 100 || record.UsageWeekly != 100 {
+	if record.Usage5h != 0 || record.UsageWeekly != 100 || !record.HasWeeklyWindow {
 		t.Fatalf("unexpected zero-used remaining values %#v", record)
 	}
 }
@@ -350,7 +360,7 @@ func TestSessionLogCollectorUsesLatestCodexRateLimitEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Usage5h != 56 || record.UsageWeekly != 9 || record.ResetTime5h == "" || record.ResetTimeWeekly == "" {
+	if record.Usage5h != 0 || record.UsageWeekly != 9 || !record.HasWeeklyWindow {
 		t.Fatalf("unexpected record %#v", record)
 	}
 }
@@ -381,7 +391,7 @@ func TestAPICollectorAcceptsWhamAccountIDNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Source != SourceAPI || record.Usage5h != 88 || record.UsageWeekly != 98 {
+	if record.Source != SourceAPI || record.Usage5h != 0 || record.UsageWeekly != 88 || !record.HasWeeklyWindow {
 		t.Fatalf("unexpected record %#v", record)
 	}
 }
@@ -448,10 +458,76 @@ func TestParseCurrentWhamUsageRecordWithCredits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Remaining5h != 92 || record.RemainingWeekly != 55 || record.UsageBasis != "remaining" || record.Unit != UnitPercent {
+	if record.Remaining5h != 0 || record.RemainingWeekly != 92 || !record.HasWeeklyWindow || record.PlanType != "plus" || record.CreditsAvailable == nil || *record.CreditsAvailable || record.Availability != "available" || record.UsageBasis != "remaining" || record.Unit != UnitPercent {
 		t.Fatalf("record = %#v", record)
 	}
-	if record.ResetTime5h == "" || record.ResetTimeWeekly == "" {
-		t.Fatalf("missing reset metadata: %#v", record)
+	if record.ResetTime5h != "" || record.ResetTimeWeekly != "" {
+		t.Fatalf("unexpected legacy reset metadata: %#v", record)
+	}
+}
+
+func TestParseWhamUsageWithoutPrimaryWindowIsUnknown(t *testing.T) {
+	record, err := ParseUsageRecord([]byte(`{
+		"plan_type": "plus",
+		"rate_limit": {"secondary_window": {"used_percent": 4}},
+		"credits": {"has_credits": false}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.HasWeeklyWindow || record.Availability != "unknown" || record.RemainingWeekly != 0 {
+		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestParseWhamUsagePrefersBlockingEntitlement(t *testing.T) {
+	record, err := ParseUsageRecord([]byte(`{
+		"rate_limit": {"allowed": true, "primary_window": {"used_percent": 1}},
+		"credits": {"has_credits": true, "overage_limit_reached": true},
+		"spend_control": {"reached": true}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Availability != "blocked" || !record.HasWeeklyWindow {
+		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestParseWhamUsageCreditMetadataHandlesOptionalBalance(t *testing.T) {
+	record, err := ParseUsageRecord([]byte(`{
+		"rate_limit": {"allowed": false, "primary_window": {"used_percent": 10}},
+		"credits": {"has_credits": true, "balance": 12.5, "approx_local_messages": 24, "approx_cloud_messages": 6}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Availability != "credit_available" || record.CreditsBalance == nil || *record.CreditsBalance != "12.5" || record.CreditsApproxLocalMessages == nil || *record.CreditsApproxLocalMessages != 24 || record.CreditsApproxCloudMessages == nil || *record.CreditsApproxCloudMessages != 6 {
+		t.Fatalf("record = %#v", record)
+	}
+
+	record, err = ParseUsageRecord([]byte(`{
+		"rate_limit": {"allowed": false, "primary_window": {"used_percent": 10}},
+		"credits": {"has_credits": false, "balance": {"unexpected": true}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Availability != "limited" || record.CreditsBalance != nil {
+		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestParseWhamUsageAcceptsArrayMessageEstimatesWithoutInventingValues(t *testing.T) {
+	record, err := ParseUsageRecord([]byte(`{
+		"plan_type": "free",
+		"rate_limit": {"allowed": true, "primary_window": {"used_percent": 64}},
+		"credits": {"has_credits": false, "approx_local_messages": [3, 6], "approx_cloud_messages": [1, 2]}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.HasWeeklyWindow || record.RemainingWeekly != 36 || record.Availability != "available" || record.CreditsApproxLocalMessages != nil || record.CreditsApproxCloudMessages != nil {
+		t.Fatalf("record = %#v", record)
 	}
 }

@@ -40,20 +40,32 @@ func (c AccountCollector) Collect(_ context.Context, account accounts.Account) (
 		unit = UnitPercent
 	}
 	return UsageRecord{
-		Account:         accountIdentity(account),
-		Usage5h:         float64(account.Usage5h),
-		UsageWeekly:     float64(account.UsageWeekly),
-		Remaining5h:     float64(account.Usage5h),
-		RemainingWeekly: float64(account.UsageWeekly),
-		ResetTime:       firstNonEmpty(account.ResetTime5h, account.ResetTimeWeekly),
-		ResetTime5h:     account.ResetTime5h,
-		ResetTimeWeekly: account.ResetTimeWeekly,
-		Unit:            unit,
-		UsageBasis:      "remaining",
-		Source:          SourceAccount,
-		LastRefresh:     now,
-		Stale:           true,
-		Error:           account.UsageError,
+		Account:                    accountIdentity(account),
+		Usage5h:                    float64(account.Usage5h),
+		UsageWeekly:                float64(account.UsageWeekly),
+		Remaining5h:                float64(account.Usage5h),
+		RemainingWeekly:            float64(account.UsageWeekly),
+		ResetTime:                  firstNonEmpty(account.ResetTime5h, account.ResetTimeWeekly),
+		ResetTime5h:                account.ResetTime5h,
+		ResetTimeWeekly:            account.ResetTimeWeekly,
+		HasWeeklyWindow:            account.HasWeeklyWindow,
+		Availability:               account.Availability,
+		PlanType:                   account.PlanType,
+		RateLimitAllowed:           account.RateLimitAllowed,
+		RateLimitReachedType:       account.RateLimitReachedType,
+		CreditsAvailable:           account.CreditsAvailable,
+		CreditsUnlimited:           account.CreditsUnlimited,
+		CreditsBalance:             account.CreditsBalance,
+		CreditsApproxLocalMessages: account.CreditsApproxLocalMessages,
+		CreditsApproxCloudMessages: account.CreditsApproxCloudMessages,
+		CreditsOverageLimitReached: account.CreditsOverageLimitReached,
+		SpendControlReached:        account.SpendControlReached,
+		Unit:                       unit,
+		UsageBasis:                 "remaining",
+		Source:                     SourceAccount,
+		LastRefresh:                now,
+		Stale:                      true,
+		Error:                      account.UsageError,
 	}, nil
 }
 
@@ -370,7 +382,7 @@ func expandGlob(pattern string) ([]string, error) {
 
 func ParseUsageRecord(data []byte) (UsageRecord, error) {
 	var record UsageRecord
-	if err := json.Unmarshal(data, &record); err == nil && (record.Account != "" || record.Usage5h != 0 || record.UsageWeekly != 0 || record.ResetTime != "") {
+	if err := json.Unmarshal(data, &record); err == nil && isUsageRecordPayload(record) && !hasRateLimitPayload(data) {
 		return record, nil
 	}
 	var records []UsageRecord
@@ -381,6 +393,21 @@ func ParseUsageRecord(data []byte) (UsageRecord, error) {
 		return record, nil
 	}
 	return UsageRecord{}, errors.New("parse usage output: expected usage JSON object, array, or rate-limit JSON")
+}
+
+func hasRateLimitPayload(data []byte) bool {
+	var payload struct {
+		RateLimit json.RawMessage `json:"rate_limit"`
+	}
+	return json.Unmarshal(data, &payload) == nil && len(bytes.TrimSpace(payload.RateLimit)) > 0 && string(bytes.TrimSpace(payload.RateLimit)) != "null"
+}
+
+func isUsageRecordPayload(record UsageRecord) bool {
+	return record.Account != "" || record.Usage5h != 0 || record.UsageWeekly != 0 || record.ResetTime != "" ||
+		record.HasWeeklyWindow || record.Availability != "" || record.PlanType != "" || record.RateLimitAllowed != nil ||
+		record.RateLimitReachedType != "" || record.CreditsAvailable != nil || record.CreditsUnlimited != nil ||
+		record.CreditsBalance != nil || record.CreditsApproxLocalMessages != nil || record.CreditsApproxCloudMessages != nil ||
+		record.CreditsOverageLimitReached != nil || record.SpendControlReached != nil
 }
 
 func usageResponseAccountID(data []byte) string {
@@ -424,8 +451,25 @@ type rateLimitPayload struct {
 	Payload     struct {
 		RateLimits codexRateLimits `json:"rate_limits"`
 	} `json:"payload"`
-	CodexRateLimits codexRateLimits `json:"rate_limits_object"`
-	RateLimit       struct {
+	CodexRateLimits      codexRateLimits `json:"rate_limits_object"`
+	PlanType             string          `json:"plan_type"`
+	RateLimitReachedType string          `json:"rate_limit_reached_type"`
+	Credits              struct {
+		HasCredits          *bool           `json:"has_credits"`
+		Available           *bool           `json:"available"`
+		Unlimited           *bool           `json:"unlimited"`
+		Balance             json.RawMessage `json:"balance"`
+		ApproxLocalMessages json.RawMessage `json:"approx_local_messages"`
+		ApproxCloudMessages json.RawMessage `json:"approx_cloud_messages"`
+		OverageLimitReached *bool           `json:"overage_limit_reached"`
+	} `json:"credits"`
+	SpendControl struct {
+		Reached *bool `json:"reached"`
+	} `json:"spend_control"`
+	RateLimit struct {
+		Allowed         *bool           `json:"allowed"`
+		LimitReached    *bool           `json:"limit_reached"`
+		ReachedType     string          `json:"reached_type"`
 		PrimaryWindow   rateLimitWindow `json:"primary_window"`
 		SecondaryWindow rateLimitWindow `json:"secondary_window"`
 	} `json:"rate_limit"`
@@ -547,16 +591,13 @@ func parseRateLimitPayload(data []byte) (UsageRecord, error) {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return UsageRecord{}, err
 	}
-	five := payload.FiveHour
+	legacyFive := payload.FiveHour
 	weekly := payload.SevenDay
 	if weekly.hasNoData() {
 		weekly = payload.Weekly
 	}
 	if !payload.RateLimit.PrimaryWindow.hasNoData() {
-		five = payload.RateLimit.PrimaryWindow
-	}
-	if !payload.RateLimit.SecondaryWindow.hasNoData() {
-		weekly = payload.RateLimit.SecondaryWindow
+		weekly = payload.RateLimit.PrimaryWindow
 	}
 	items := append(payload.RateLimits, payload.RateLimits2...)
 	if !payload.Payload.RateLimits.Primary.hasNoData() || !payload.Payload.RateLimits.Secondary.hasNoData() {
@@ -565,30 +606,132 @@ func parseRateLimitPayload(data []byte) (UsageRecord, error) {
 	for _, item := range items {
 		window := strings.ToLower(strings.TrimSpace(item.Window + " " + item.Name + " " + item.Type))
 		switch {
-		case item.WindowMinutes == 300 || strings.Contains(window, "5h") || strings.Contains(window, "5 hour") || strings.Contains(window, "five") || strings.Contains(window, "primary"):
-			five = rateLimitWindow{RemainingPercentage: item.remainingPercent(), ResetsAt: item.resetUnix(), remainingSet: true}
-		case item.WindowMinutes == 10080 || strings.Contains(window, "7d") || strings.Contains(window, "7 day") || strings.Contains(window, "seven") || strings.Contains(window, "week") || strings.Contains(window, "secondary"):
+		case item.WindowMinutes == 300 || strings.Contains(window, "5h") || strings.Contains(window, "5 hour") || strings.Contains(window, "five"):
+			legacyFive = rateLimitWindow{RemainingPercentage: item.remainingPercent(), ResetsAt: item.resetUnix(), remainingSet: true}
+		case item.WindowMinutes == 10080 || strings.Contains(window, "7d") || strings.Contains(window, "7 day") || strings.Contains(window, "seven") || strings.Contains(window, "week") || strings.Contains(window, "primary"):
 			weekly = rateLimitWindow{RemainingPercentage: item.remainingPercent(), ResetsAt: item.resetUnix(), remainingSet: true}
 		}
 	}
-	if five.hasNoData() && weekly.hasNoData() {
-		return UsageRecord{}, errors.New("rate-limit payload has no 5h or weekly usage")
+	if weekly.hasNoData() && legacyFive.hasNoData() && !payloadHasEntitlement(payload) {
+		return UsageRecord{}, errors.New("rate-limit payload has no recognizable usage or entitlement data")
 	}
-	fiveReset := unixString(five.resetUnix())
-	weeklyReset := unixString(weekly.resetUnix())
-	return UsageRecord{
-		Usage5h:         five.remainingPercent(),
-		UsageWeekly:     weekly.remainingPercent(),
-		Remaining5h:     five.remainingPercent(),
-		RemainingWeekly: weekly.remainingPercent(),
-		ResetTime:       nearestReset(five.resetUnix(), weekly.resetUnix()),
-		ResetTime5h:     fiveReset,
-		ResetTimeWeekly: weeklyReset,
-		UsageBasis:      "remaining",
-		Unit:            UnitPercent,
-		Source:          payload.Source,
-		LastRefresh:     payloadRefreshTime(payload),
-	}, nil
+	reachedType := strings.TrimSpace(payload.RateLimitReachedType)
+	if reachedType == "" {
+		reachedType = strings.TrimSpace(payload.RateLimit.ReachedType)
+	}
+	record := UsageRecord{
+		UsageBasis:                 "remaining",
+		Unit:                       UnitPercent,
+		Source:                     payload.Source,
+		LastRefresh:                payloadRefreshTime(payload),
+		PlanType:                   strings.TrimSpace(payload.PlanType),
+		RateLimitAllowed:           payload.RateLimit.Allowed,
+		RateLimitReachedType:       reachedType,
+		CreditsAvailable:           firstBool(payload.Credits.HasCredits, payload.Credits.Available),
+		CreditsUnlimited:           payload.Credits.Unlimited,
+		CreditsBalance:             creditBalance(payload.Credits.Balance),
+		CreditsApproxLocalMessages: creditMessageEstimate(payload.Credits.ApproxLocalMessages),
+		CreditsApproxCloudMessages: creditMessageEstimate(payload.Credits.ApproxCloudMessages),
+		CreditsOverageLimitReached: payload.Credits.OverageLimitReached,
+		SpendControlReached:        payload.SpendControl.Reached,
+	}
+	if !weekly.hasNoData() {
+		record.HasWeeklyWindow = true
+		record.UsageWeekly = weekly.remainingPercent()
+		record.RemainingWeekly = weekly.remainingPercent()
+	} else if !legacyFive.hasNoData() {
+		// Legacy sources remain parseable, but must not be treated as the current quota.
+		record.Usage5h = legacyFive.remainingPercent()
+		record.Remaining5h = legacyFive.remainingPercent()
+	}
+	record.Availability = normalizeAvailability(record, payload.RateLimit.LimitReached)
+	return record, nil
+}
+
+func payloadHasEntitlement(payload rateLimitPayload) bool {
+	return payload.RateLimit.Allowed != nil || payload.RateLimit.LimitReached != nil ||
+		strings.TrimSpace(payload.RateLimitReachedType) != "" || strings.TrimSpace(payload.RateLimit.ReachedType) != "" ||
+		strings.TrimSpace(payload.PlanType) != "" || payload.Credits.HasCredits != nil || payload.Credits.Available != nil || payload.Credits.Unlimited != nil ||
+		len(bytes.TrimSpace(payload.Credits.Balance)) > 0 || len(bytes.TrimSpace(payload.Credits.ApproxLocalMessages)) > 0 ||
+		len(bytes.TrimSpace(payload.Credits.ApproxCloudMessages)) > 0 || payload.Credits.OverageLimitReached != nil ||
+		payload.SpendControl.Reached != nil || !payload.RateLimit.SecondaryWindow.hasNoData()
+}
+
+func creditBalance(raw json.RawMessage) *string {
+	value := bytes.TrimSpace(raw)
+	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err == nil {
+		text = strings.TrimSpace(text)
+		if text != "" {
+			return &text
+		}
+		return nil
+	}
+	var number json.Number
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	if err := decoder.Decode(&number); err == nil {
+		text = number.String()
+		return &text
+	}
+	return nil
+}
+
+func creditMessageEstimate(raw json.RawMessage) *int {
+	value := bytes.TrimSpace(raw)
+	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var number json.Number
+	if err := decoder.Decode(&number); err != nil {
+		return nil
+	}
+	parsed, err := number.Int64()
+	if err != nil || parsed < 0 || parsed > int64(^uint(0)>>1) {
+		return nil
+	}
+	result := int(parsed)
+	return &result
+}
+
+func normalizeAvailability(record UsageRecord, limitReached *bool) string {
+	if boolIsTrue(record.SpendControlReached) || boolIsTrue(record.CreditsOverageLimitReached) {
+		return "blocked"
+	}
+	if boolIsTrue(record.RateLimitAllowed) {
+		return "available"
+	}
+	if boolIsTrue(record.CreditsAvailable) || boolIsTrue(record.CreditsUnlimited) {
+		return "credit_available"
+	}
+	if boolIsTrue(limitReached) || boolIsFalse(record.RateLimitAllowed) || strings.TrimSpace(record.RateLimitReachedType) != "" {
+		return "limited"
+	}
+	if record.HasWeeklyWindow {
+		if record.RemainingWeekly <= 0 {
+			return "limited"
+		}
+		return "available"
+	}
+	return "unknown"
+}
+
+func boolIsTrue(value *bool) bool { return value != nil && *value }
+
+func boolIsFalse(value *bool) bool { return value != nil && !*value }
+
+func firstBool(values ...*bool) *bool {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func (w rateLimitWindow) hasNoData() bool {
@@ -697,14 +840,8 @@ func normalizeRecord(record UsageRecord, account accounts.Account, source, unit 
 	if record.Unit == "" {
 		record.Unit = UnitPercent
 	}
-	if record.Remaining5h == 0 && record.Usage5h != 0 {
-		record.Remaining5h = record.Usage5h
-	}
 	if record.RemainingWeekly == 0 && record.UsageWeekly != 0 {
 		record.RemainingWeekly = record.UsageWeekly
-	}
-	if record.Usage5h == 0 && record.Remaining5h != 0 {
-		record.Usage5h = record.Remaining5h
 	}
 	if record.UsageWeekly == 0 && record.RemainingWeekly != 0 {
 		record.UsageWeekly = record.RemainingWeekly
@@ -712,8 +849,8 @@ func normalizeRecord(record UsageRecord, account accounts.Account, source, unit 
 	if record.UsageBasis == "" {
 		record.UsageBasis = "remaining"
 	}
-	if record.ResetTime5h == "" && record.ResetTime != "" {
-		record.ResetTime5h = record.ResetTime
+	if record.Availability == "" {
+		record.Availability = normalizeAvailability(record, nil)
 	}
 	if record.Source == "" {
 		record.Source = source

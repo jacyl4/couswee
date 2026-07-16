@@ -103,6 +103,8 @@ func TestPostAccountRefreshesUsage(t *testing.T) {
 			Account:         account.ProfileName,
 			Remaining5h:     63,
 			RemainingWeekly: 77,
+			HasWeeklyWindow: true,
+			Availability:    "available",
 			Unit:            usage.UnitPercent,
 			Source:          usage.SourceAPI,
 		}, nil
@@ -122,7 +124,7 @@ func TestPostAccountRefreshesUsage(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Usage5h != 63 || got.UsageWeekly != 77 || got.UsageSource != usage.SourceAPI {
+	if got.Usage5h != 0 || got.UsageWeekly != 77 || !got.HasWeeklyWindow || got.Availability != "available" || got.UsageSource != usage.SourceAPI {
 		t.Fatalf("created account usage = %#v", got)
 	}
 	records := usageService.Records()
@@ -433,21 +435,32 @@ func TestEmbeddedStaticFallbackDoesNotCatchAPI404(t *testing.T) {
 
 func TestGetCodexUsageRecords(t *testing.T) {
 	home := t.TempDir()
+	writeTestAuthFile(t, filepath.Join(home, "auth.json"))
 	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if err := store.Replace([]accounts.Account{{Nickname: "Dev1", Usage5h: 1, UsageWeekly: 2}}); err != nil {
+	if err := store.Replace([]accounts.Account{{Nickname: "Dev1", AuthPath: "~/auth.json", Usage5h: 1, UsageWeekly: 2}}); err != nil {
 		t.Fatal(err)
 	}
 	accountService := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
-	usageService := usage.NewService(usage.DefaultConfig(), usage.AccountCollector{Unit: usage.UnitTokens}, accountService.Accounts)
+	creditsAvailable := true
+	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
+		return usage.UsageRecord{Account: account.ProfileName, RemainingWeekly: 42, HasWeeklyWindow: true, Availability: "credit_available", PlanType: "plus", CreditsAvailable: &creditsAvailable, Unit: usage.UnitPercent, Source: usage.SourceAPI}, nil
+	}), accountService.Accounts)
 	usageService.Refresh(nil)
 	srv := New(accountService, Config{StaticDir: t.TempDir(), Usage: usageService})
 	resp := doReq(t, srv, http.MethodGet, "/api/codex/usage", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var records []usage.UsageRecord
+	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Usage5h != 0 || records[0].RemainingWeekly != 42 || !records[0].HasWeeklyWindow || records[0].Availability != "credit_available" || records[0].CreditsAvailable == nil || !*records[0].CreditsAvailable {
+		t.Fatalf("records = %#v", records)
 	}
 }
 
@@ -470,6 +483,37 @@ func TestGetCodexUsageStaleRecord(t *testing.T) {
 	resp := doReq(t, srv, http.MethodGet, "/api/codex/usage", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestGetCodexUsageReturnsBlockedState(t *testing.T) {
+	home := t.TempDir()
+	writeTestAuthFile(t, filepath.Join(home, "auth.json"))
+	store, err := accounts.OpenSQLiteStore(accounts.DBPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Replace([]accounts.Account{{Nickname: "Dev1", AuthPath: "~/auth.json"}}); err != nil {
+		t.Fatal(err)
+	}
+	accountService := accounts.NewService(store, home, accounts.NoopUsageRefresher{})
+	blocked := true
+	usageService := usage.NewService(usage.DefaultConfig(), collectorFunc(func(_ context.Context, account accounts.Account) (usage.UsageRecord, error) {
+		return usage.UsageRecord{Account: account.ProfileName, RemainingWeekly: 85, HasWeeklyWindow: true, Availability: "blocked", SpendControlReached: &blocked, Source: usage.SourceAPI}, nil
+	}), accountService.Accounts)
+	usageService.Refresh(nil)
+	srv := New(accountService, Config{StaticDir: t.TempDir(), Usage: usageService})
+	resp := doReq(t, srv, http.MethodGet, "/api/codex/usage", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var records []usage.UsageRecord
+	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Availability != "blocked" || records[0].SpendControlReached == nil || !*records[0].SpendControlReached {
+		t.Fatalf("records = %#v", records)
 	}
 }
 
@@ -558,6 +602,8 @@ func TestLoginStatusRefreshesUsageForSucceededAccount(t *testing.T) {
 			Account:         account.ProfileName,
 			Remaining5h:     41,
 			RemainingWeekly: 82,
+			HasWeeklyWindow: true,
+			Availability:    "available",
 			Unit:            usage.UnitPercent,
 			Source:          usage.SourceAPI,
 		}, nil
@@ -574,7 +620,7 @@ func TestLoginStatusRefreshesUsageForSucceededAccount(t *testing.T) {
 		t.Fatalf("collected = %#v, want only acc-1", collected)
 	}
 	updated := accountService.Accounts()
-	if len(updated) != 1 || updated[0].Usage5h != 41 || updated[0].UsageWeekly != 82 || updated[0].UsageSource != usage.SourceAPI {
+	if len(updated) != 1 || updated[0].Usage5h != 0 || updated[0].UsageWeekly != 82 || !updated[0].HasWeeklyWindow || updated[0].Availability != "available" || updated[0].UsageSource != usage.SourceAPI {
 		t.Fatalf("account usage = %#v", updated)
 	}
 

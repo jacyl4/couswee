@@ -27,20 +27,32 @@ const (
 )
 
 type UsageRecord struct {
-	Account         string    `json:"account"`
-	Usage5h         float64   `json:"5h_usage"`
-	UsageWeekly     float64   `json:"weekly_usage"`
-	Remaining5h     float64   `json:"5h_remaining"`
-	RemainingWeekly float64   `json:"weekly_remaining"`
-	ResetTime       string    `json:"reset_time"`
-	ResetTime5h     string    `json:"5h_reset_time"`
-	ResetTimeWeekly string    `json:"weekly_reset_time"`
-	UsageBasis      string    `json:"usage_basis"`
-	Unit            string    `json:"unit"`
-	Source          string    `json:"source"`
-	LastRefresh     time.Time `json:"last_refresh"`
-	Stale           bool      `json:"stale"`
-	Error           string    `json:"error"`
+	Account                    string    `json:"account"`
+	Usage5h                    float64   `json:"5h_usage"`
+	UsageWeekly                float64   `json:"weekly_usage"`
+	Remaining5h                float64   `json:"5h_remaining"`
+	RemainingWeekly            float64   `json:"weekly_remaining"`
+	ResetTime                  string    `json:"reset_time"`
+	ResetTime5h                string    `json:"5h_reset_time"`
+	ResetTimeWeekly            string    `json:"weekly_reset_time"`
+	UsageBasis                 string    `json:"usage_basis"`
+	Unit                       string    `json:"unit"`
+	Source                     string    `json:"source"`
+	LastRefresh                time.Time `json:"last_refresh"`
+	Stale                      bool      `json:"stale"`
+	Error                      string    `json:"error"`
+	HasWeeklyWindow            bool      `json:"has_weekly_window"`
+	Availability               string    `json:"availability"`
+	PlanType                   string    `json:"plan_type,omitempty"`
+	RateLimitAllowed           *bool     `json:"rate_limit_allowed,omitempty"`
+	RateLimitReachedType       string    `json:"rate_limit_reached_type,omitempty"`
+	CreditsAvailable           *bool     `json:"credits_available,omitempty"`
+	CreditsUnlimited           *bool     `json:"credits_unlimited,omitempty"`
+	CreditsBalance             *string   `json:"credits_balance,omitempty"`
+	CreditsApproxLocalMessages *int      `json:"credits_approx_local_messages,omitempty"`
+	CreditsApproxCloudMessages *int      `json:"credits_approx_cloud_messages,omitempty"`
+	CreditsOverageLimitReached *bool     `json:"credits_overage_limit_reached,omitempty"`
+	SpendControlReached        *bool     `json:"spend_control_reached,omitempty"`
 }
 
 type Config struct {

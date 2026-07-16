@@ -57,6 +57,18 @@ func (s *SQLiteStore) initSchema() error {
 			usage_last_refresh TEXT NOT NULL DEFAULT '',
 			usage_stale INTEGER NOT NULL DEFAULT 0,
 			usage_error TEXT NOT NULL DEFAULT '',
+			has_weekly_window INTEGER NOT NULL DEFAULT 0,
+			availability TEXT NOT NULL DEFAULT '',
+			plan_type TEXT NOT NULL DEFAULT '',
+			rate_limit_allowed INTEGER,
+			rate_limit_reached_type TEXT NOT NULL DEFAULT '',
+			credits_available INTEGER,
+			credits_unlimited INTEGER,
+			credits_balance TEXT,
+			credits_approx_local_messages INTEGER,
+			credits_approx_cloud_messages INTEGER,
+			credits_overage_limit_reached INTEGER,
+			spend_control_reached INTEGER,
 			active INTEGER NOT NULL DEFAULT 0,
 			last_used_at TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -100,6 +112,27 @@ func (s *SQLiteStore) initSchema() error {
 	}
 	if err := s.ensureColumn("accounts", "usage_error", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{"has_weekly_window", "INTEGER NOT NULL DEFAULT 0"},
+		{"availability", "TEXT NOT NULL DEFAULT ''"},
+		{"plan_type", "TEXT NOT NULL DEFAULT ''"},
+		{"rate_limit_allowed", "INTEGER"},
+		{"rate_limit_reached_type", "TEXT NOT NULL DEFAULT ''"},
+		{"credits_available", "INTEGER"},
+		{"credits_unlimited", "INTEGER"},
+		{"credits_balance", "TEXT"},
+		{"credits_approx_local_messages", "INTEGER"},
+		{"credits_approx_cloud_messages", "INTEGER"},
+		{"credits_overage_limit_reached", "INTEGER"},
+		{"spend_control_reached", "INTEGER"},
+	} {
+		if err := s.ensureColumn("accounts", column.name, column.definition); err != nil {
+			return err
+		}
 	}
 	if err := s.rebuildAccountTableIfNeeded(); err != nil {
 		return err
@@ -161,13 +194,25 @@ func (s *SQLiteStore) rebuildAccountTableIfNeeded() error {
 			usage_last_refresh TEXT NOT NULL DEFAULT '',
 			usage_stale INTEGER NOT NULL DEFAULT 0,
 			usage_error TEXT NOT NULL DEFAULT '',
+			has_weekly_window INTEGER NOT NULL DEFAULT 0,
+			availability TEXT NOT NULL DEFAULT '',
+			plan_type TEXT NOT NULL DEFAULT '',
+			rate_limit_allowed INTEGER,
+			rate_limit_reached_type TEXT NOT NULL DEFAULT '',
+			credits_available INTEGER,
+			credits_unlimited INTEGER,
+			credits_balance TEXT,
+			credits_approx_local_messages INTEGER,
+			credits_approx_cloud_messages INTEGER,
+			credits_overage_limit_reached INTEGER,
+			spend_control_reached INTEGER,
 			active INTEGER NOT NULL DEFAULT 0,
 			last_used_at TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
-		`INSERT INTO accounts_new(id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, active, last_used_at, created_at, updated_at)
-			SELECT id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, active, last_used_at, created_at, updated_at FROM accounts`,
+		`INSERT INTO accounts_new(id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, has_weekly_window, availability, plan_type, rate_limit_allowed, rate_limit_reached_type, credits_available, credits_unlimited, credits_balance, credits_approx_local_messages, credits_approx_cloud_messages, credits_overage_limit_reached, spend_control_reached, active, last_used_at, created_at, updated_at)
+			SELECT id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, has_weekly_window, availability, plan_type, rate_limit_allowed, rate_limit_reached_type, credits_available, credits_unlimited, credits_balance, credits_approx_local_messages, credits_approx_cloud_messages, credits_overage_limit_reached, spend_control_reached, active, last_used_at, created_at, updated_at FROM accounts`,
 		`DROP TABLE accounts`,
 		`ALTER TABLE accounts_new RENAME TO accounts`,
 	}
@@ -345,7 +390,7 @@ func (s *SQLiteStore) UpdateAccount(selector string, patch Account) (Account, er
 }
 
 func (s *SQLiteStore) accountsLocked() ([]Account, error) {
-	rows, err := s.db.Query(`SELECT id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, active, last_used_at, created_at, updated_at FROM accounts ORDER BY created_at, nickname`)
+	rows, err := s.db.Query(`SELECT id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, has_weekly_window, availability, plan_type, rate_limit_allowed, rate_limit_reached_type, credits_available, credits_unlimited, credits_balance, credits_approx_local_messages, credits_approx_cloud_messages, credits_overage_limit_reached, spend_control_reached, active, last_used_at, created_at, updated_at FROM accounts ORDER BY created_at, nickname`)
 	if err != nil {
 		return nil, err
 	}
@@ -355,11 +400,24 @@ func (s *SQLiteStore) accountsLocked() ([]Account, error) {
 		var a Account
 		var active int
 		var usageStale int
-		if err := rows.Scan(&a.ID, &a.Nickname, &a.ProfileName, &a.AuthPath, &a.LoginMethod, &a.Status, &a.Subscription, &a.Usage5h, &a.UsageWeekly, &a.ResetTime5h, &a.ResetTimeWeekly, &a.UsageSource, &a.UsageLastRefresh, &usageStale, &a.UsageError, &active, &a.LastUsedAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		var hasWeeklyWindow int
+		var rateLimitAllowed, creditsAvailable, creditsUnlimited, creditsOverageLimitReached, spendControlReached sql.NullInt64
+		var creditsBalance sql.NullString
+		var creditsApproxLocalMessages, creditsApproxCloudMessages sql.NullInt64
+		if err := rows.Scan(&a.ID, &a.Nickname, &a.ProfileName, &a.AuthPath, &a.LoginMethod, &a.Status, &a.Subscription, &a.Usage5h, &a.UsageWeekly, &a.ResetTime5h, &a.ResetTimeWeekly, &a.UsageSource, &a.UsageLastRefresh, &usageStale, &a.UsageError, &hasWeeklyWindow, &a.Availability, &a.PlanType, &rateLimitAllowed, &a.RateLimitReachedType, &creditsAvailable, &creditsUnlimited, &creditsBalance, &creditsApproxLocalMessages, &creditsApproxCloudMessages, &creditsOverageLimitReached, &spendControlReached, &active, &a.LastUsedAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		a.Active = active == 1
 		a.UsageStale = usageStale == 1
+		a.HasWeeklyWindow = hasWeeklyWindow == 1
+		a.RateLimitAllowed = nullBool(rateLimitAllowed)
+		a.CreditsAvailable = nullBool(creditsAvailable)
+		a.CreditsUnlimited = nullBool(creditsUnlimited)
+		a.CreditsBalance = nullString(creditsBalance)
+		a.CreditsApproxLocalMessages = nullInt(creditsApproxLocalMessages)
+		a.CreditsApproxCloudMessages = nullInt(creditsApproxCloudMessages)
+		a.CreditsOverageLimitReached = nullBool(creditsOverageLimitReached)
+		a.SpendControlReached = nullBool(spendControlReached)
 		accounts = append(accounts, a)
 	}
 	return accounts, rows.Err()
@@ -367,10 +425,54 @@ func (s *SQLiteStore) accountsLocked() ([]Account, error) {
 
 func insertAccountTx(tx *sql.Tx, account Account) error {
 	account = normalizeAccount(account)
-	_, err := tx.Exec(`INSERT INTO accounts(id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, active, last_used_at, created_at, updated_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		account.ID, account.Nickname, account.ProfileName, account.AuthPath, account.LoginMethod, account.Status, account.Subscription, account.Usage5h, account.UsageWeekly, account.ResetTime5h, account.ResetTimeWeekly, account.UsageSource, account.UsageLastRefresh, boolInt(account.UsageStale), account.UsageError, boolInt(account.Active), account.LastUsedAt, account.CreatedAt, account.UpdatedAt)
+	_, err := tx.Exec(`INSERT INTO accounts(id, nickname, profile_name, auth_path, login_method, status, subscription, usage5h, usage_weekly, reset_time5h, reset_time_weekly, usage_source, usage_last_refresh, usage_stale, usage_error, has_weekly_window, availability, plan_type, rate_limit_allowed, rate_limit_reached_type, credits_available, credits_unlimited, credits_balance, credits_approx_local_messages, credits_approx_cloud_messages, credits_overage_limit_reached, spend_control_reached, active, last_used_at, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		account.ID, account.Nickname, account.ProfileName, account.AuthPath, account.LoginMethod, account.Status, account.Subscription, account.Usage5h, account.UsageWeekly, account.ResetTime5h, account.ResetTimeWeekly, account.UsageSource, account.UsageLastRefresh, boolInt(account.UsageStale), account.UsageError, boolInt(account.HasWeeklyWindow), account.Availability, account.PlanType, boolValue(account.RateLimitAllowed), account.RateLimitReachedType, boolValue(account.CreditsAvailable), boolValue(account.CreditsUnlimited), stringValue(account.CreditsBalance), intValue(account.CreditsApproxLocalMessages), intValue(account.CreditsApproxCloudMessages), boolValue(account.CreditsOverageLimitReached), boolValue(account.SpendControlReached), boolInt(account.Active), account.LastUsedAt, account.CreatedAt, account.UpdatedAt)
 	return err
+}
+
+func nullBool(value sql.NullInt64) *bool {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64 != 0
+	return &result
+}
+
+func nullString(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
+}
+
+func nullInt(value sql.NullInt64) *int {
+	if !value.Valid {
+		return nil
+	}
+	result := int(value.Int64)
+	return &result
+}
+
+func boolValue(value *bool) any {
+	if value == nil {
+		return nil
+	}
+	return boolInt(*value)
+}
+
+func stringValue(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func intValue(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func normalizeAccounts(accounts []Account) []Account {

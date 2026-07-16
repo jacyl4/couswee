@@ -19,10 +19,19 @@
     login_method?: string;
     status?: string;
     subscription?: string;
-    '5h_usage'?: number;
     weekly_usage?: number;
-    '5h_reset_time'?: string;
-    weekly_reset_time?: string;
+    has_weekly_window?: boolean;
+    availability?: Availability;
+    plan_type?: string;
+    rate_limit_allowed?: boolean;
+    rate_limit_reached_type?: string;
+    credits_available?: boolean;
+    credits_unlimited?: boolean;
+    credits_balance?: string;
+    credits_approx_local_messages?: number;
+    credits_approx_cloud_messages?: number;
+    credits_overage_limit_reached?: boolean;
+    spend_control_reached?: boolean;
     usage_source?: string;
     usage_last_refresh?: string;
     usage_stale?: boolean;
@@ -52,13 +61,20 @@
 
   type UsageRecord = {
     account: string;
-    '5h_usage'?: number;
     weekly_usage?: number;
-    '5h_remaining'?: number;
     weekly_remaining?: number;
-    reset_time?: string;
-    '5h_reset_time'?: string;
-    weekly_reset_time?: string;
+    has_weekly_window?: boolean;
+    availability?: Availability;
+    plan_type?: string;
+    rate_limit_allowed?: boolean;
+    rate_limit_reached_type?: string;
+    credits_available?: boolean;
+    credits_unlimited?: boolean;
+    credits_balance?: string;
+    credits_approx_local_messages?: number;
+    credits_approx_cloud_messages?: number;
+    credits_overage_limit_reached?: boolean;
+    spend_control_reached?: boolean;
     usage_basis?: string;
     unit?: string;
     source?: string;
@@ -68,6 +84,7 @@
   };
 
   type Tone = 'ok' | 'warn' | 'danger';
+  type Availability = 'available' | 'credit_available' | 'limited' | 'blocked' | 'unknown';
   type RefreshScope = {
     accounts?: boolean;
     usage?: boolean;
@@ -77,10 +94,12 @@
     key: string;
     account: Account;
     usage?: UsageRecord;
-    remaining5h: number;
     remainingWeekly: number;
+    hasWeeklyWindow: boolean;
+    availability: Availability;
     tone: Tone;
     statusLabel: string;
+    entitlementSummary: string;
     loginStatusLabel: string;
     authExpired: boolean;
     authStatusLabel: string;
@@ -219,21 +238,25 @@
     refreshingSet: Set<string>
   ): DashboardAccount {
     const usage = usageMap.get(accountUsageKey(account));
-    const remaining5h = remaining(account, usage, '5h_remaining');
-    const remainingWeekly = remaining(account, usage, 'weekly_remaining');
+    const remainingWeekly = remainingWeeklyValue(account, usage);
+    const hasWeeklyWindow = usage?.has_weekly_window ?? account.has_weekly_window ?? false;
     const authExpired = isAuthExpired(account);
     const authProblem = hasAuthProblem(account);
-    const tone = authProblem ? 'danger' : toneFor(remaining5h, remainingWeekly);
+    const reportedAvailability = usage?.availability || account.availability || 'unknown';
+    const availability: Availability = authProblem ? 'blocked' : reportedAvailability;
+    const tone = toneFor(availability, remainingWeekly, hasWeeklyWindow);
     const key = accountKey(account);
     const usageError = visibleUsageError(account, usage?.error || account.usage_error || '');
     return {
       key,
       account,
       usage,
-      remaining5h,
       remainingWeekly,
+      hasWeeklyWindow,
+      availability,
       tone,
-      statusLabel: authExpired ? '认证过期' : labelFor(tone),
+      statusLabel: authExpired ? '认证过期' : labelFor(availability, tone),
+      entitlementSummary: entitlementSummary(account, usage),
       loginStatusLabel: authExpired ? '需要重新登录' : loginStatusLabel(account.status),
       authExpired,
       authStatusLabel: authStatusLabel(account),
@@ -245,10 +268,20 @@
     };
   }
 
-  function remaining(account: Account, record: UsageRecord | undefined, field: '5h_remaining' | 'weekly_remaining') {
-    const legacyField = field === '5h_remaining' ? '5h_usage' : 'weekly_usage';
-    const fallback = field === '5h_remaining' ? account['5h_usage'] : account.weekly_usage;
-    return clampPercent(record?.[field] ?? record?.[legacyField] ?? fallback ?? 0);
+  function remainingWeeklyValue(account: Account, record: UsageRecord | undefined) {
+    return clampPercent(record?.weekly_remaining ?? record?.weekly_usage ?? account.weekly_usage ?? 0);
+  }
+
+  function entitlementSummary(account: Account, record: UsageRecord | undefined) {
+    const planType = record?.plan_type || account.plan_type || '';
+    const unlimited = record?.credits_unlimited ?? account.credits_unlimited;
+    const creditsAvailable = record?.credits_available ?? account.credits_available;
+    const balance = record?.credits_balance ?? account.credits_balance;
+    const items = planType ? [planType] : [];
+    if (unlimited) items.push('credits 不限');
+    else if (creditsAvailable) items.push(balance ? `credits ${balance}` : 'credits 可用');
+    else if (balance) items.push(`credits ${balance}`);
+    return items.join(' · ');
   }
 
   function loginStatusLabel(status = 'ready') {
@@ -515,20 +548,6 @@
     return formatRelativeTime(parsed);
   }
 
-  function formatReset(value = '', mode: 'short' | 'weekly') {
-    if (!value) return 'resets 未知';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return `resets ${value}`;
-    const time = new Intl.DateTimeFormat('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(date);
-    if (mode === 'short') return `resets ${time}`;
-    const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' }).format(date);
-    return `resets ${time} on ${dayMonth}`;
-  }
-
   function initialFor(nickname: string) {
     return (nickname.trim()[0] || '?').toUpperCase();
   }
@@ -674,6 +693,9 @@
               <h2>{item.account.nickname}</h2>
               <span class="status-pill {item.tone}"><i></i>{item.loginStatusLabel ? `${item.statusLabel} · ${item.loginStatusLabel}` : item.statusLabel}</span>
               <p>{item.account.profile_name || '未命名 profile'} · 上次切换： {formatLastSwitch(item.account)}</p>
+              {#if item.entitlementSummary}
+                <p class="entitlement-state">{item.entitlementSummary}</p>
+              {/if}
               {#if item.authStatusLabel}
                 <p class="auth-state" class:danger={item.authExpired}>{item.authStatusLabel}{item.authStatusDetail ? `，${item.authStatusDetail}` : ''}</p>
               {/if}
@@ -681,30 +703,17 @@
           </div>
 
           <div class="usage-block" aria-label={`${item.account.nickname} 剩余流量`}>
-            <div class="limit-row">
-              <div class="limit-heading">
-                <span class="limit-label">5h limit:</span>
-                <strong class="remaining {item.tone}">{item.remaining5h}% left</strong>
-              </div>
-              <div class="limit-detail">
-                <div class="meter" aria-label={`5h remaining ${item.remaining5h}%`}>
-                  <span class={item.tone} style={`width: ${item.remaining5h}%`}></span>
+            {#if item.hasWeeklyWindow}
+              <div class="limit-row">
+                <div class="limit-heading">
+                  <span class="limit-label">周额度</span>
+                  <strong class="remaining {item.tone}">{item.remainingWeekly}% 可用</strong>
                 </div>
-                <span class="reset-text">({formatReset(item.usage?.['5h_reset_time'] || item.usage?.reset_time || item.account['5h_reset_time'], 'short')})</span>
-              </div>
-            </div>
-            <div class="limit-row">
-              <div class="limit-heading">
-                <span class="limit-label">Weekly limit:</span>
-                <strong class="remaining {item.tone}">{item.remainingWeekly}% left</strong>
-              </div>
-              <div class="limit-detail">
                 <div class="meter" aria-label={`weekly remaining ${item.remainingWeekly}%`}>
                   <span class={item.tone} style={`width: ${item.remainingWeekly}%`}></span>
                 </div>
-                <span class="reset-text">({formatReset(item.usage?.weekly_reset_time || item.account.weekly_reset_time, 'weekly')})</span>
               </div>
-            </div>
+            {/if}
             {#if item.refreshingUsage}
               <p class="usage-note">正在刷新用量…</p>
             {:else if item.usageError}

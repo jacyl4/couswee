@@ -8,7 +8,11 @@ import (
 )
 
 func TestUsageRecordJSONFields(t *testing.T) {
-	record := UsageRecord{Account: "Dev1", Usage5h: 10, UsageWeekly: 20, ResetTime: "2026-05-14T00:00:00+08:00", ResetTime5h: "2026-05-14T00:00:00+08:00", ResetTimeWeekly: "2026-05-17T00:00:00+08:00", UsageBasis: "remaining", Unit: UnitTokens, Source: SourceAPI, LastRefresh: time.Unix(1, 0).UTC(), Stale: true, Error: "boom"}
+	allowed := true
+	credits := true
+	balance := "12.50"
+	localMessages := 20
+	record := UsageRecord{Account: "Dev1", Usage5h: 10, UsageWeekly: 20, ResetTime: "2026-05-14T00:00:00+08:00", ResetTime5h: "2026-05-14T00:00:00+08:00", ResetTimeWeekly: "2026-05-17T00:00:00+08:00", UsageBasis: "remaining", Unit: UnitTokens, Source: SourceAPI, LastRefresh: time.Unix(1, 0).UTC(), Stale: true, Error: "boom", HasWeeklyWindow: true, Availability: "credit_available", PlanType: "plus", RateLimitAllowed: &allowed, RateLimitReachedType: "weekly", CreditsAvailable: &credits, CreditsBalance: &balance, CreditsApproxLocalMessages: &localMessages}
 	data, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -17,10 +21,27 @@ func TestUsageRecordJSONFields(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"account", "5h_usage", "weekly_usage", "5h_remaining", "weekly_remaining", "reset_time", "5h_reset_time", "weekly_reset_time", "usage_basis", "unit", "source", "last_refresh", "stale", "error"} {
+	for _, field := range []string{"account", "5h_usage", "weekly_usage", "5h_remaining", "weekly_remaining", "reset_time", "5h_reset_time", "weekly_reset_time", "usage_basis", "unit", "source", "last_refresh", "stale", "error", "has_weekly_window", "availability", "plan_type", "rate_limit_allowed", "rate_limit_reached_type", "credits_available", "credits_balance", "credits_approx_local_messages"} {
 		if _, ok := got[field]; !ok {
 			t.Fatalf("missing JSON field %s in %s", field, data)
 		}
+	}
+}
+
+func TestUsageRecordOmitsUnknownOptionalCreditFields(t *testing.T) {
+	data, err := json.Marshal(UsageRecord{Account: "Dev1", HasWeeklyWindow: false, Availability: "unknown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["has_weekly_window"] != false || got["availability"] != "unknown" {
+		t.Fatalf("required state fields = %#v", got)
+	}
+	if _, ok := got["credits_balance"]; ok {
+		t.Fatalf("unknown credit balance must be omitted: %s", data)
 	}
 }
 
